@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gateway"
+version = "0.1.0"
+description = "Gateway Service for the Conversation Intelligence Platform"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.115.0",
+    "uvicorn[standard]",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg",
+    "redis>=5.0",
+    "aiobotocore>=2.9",
+    "python-multipart",
+    "structlog",
+]
+
+[project.scripts]
+gateway = "app.main:create_app"

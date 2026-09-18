@@ -1,0 +1,304 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packages/**'
+      - 'services/gateway/**'
+      - 'services/worker/**'
+      - 'services/agent/**'
+      - 'infra/**'
+      - '.github/workflows/ci.yml'
+      - 'pyproject.toml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'packages/**'
+      - 'services/gateway/**'
+      - 'services/worker/**'
+      - 'services/agent/**'
+      - 'infra/**'
+      - '.github/workflows/ci.yml'
+      - 'pyproject.toml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Linting Tools and Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy pydantic pydantic-settings sqlalchemy asyncpg celery redis litellm instructor fastapi uvicorn types-redis
+
+      - name: Run Ruff Linter
+        run: ruff check .
+
+      - name: Run Ruff Format Check
+        run: ruff format --check .
+
+      - name: Run Mypy Type Checker
+        run: mypy packages/ services/
+
+  test-packages:
+    name: Test Packages
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: prohuman
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman
+      REDIS_URL: redis://localhost:6379/0
+      PYTHONPATH: .
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio alembic asyncpg sqlalchemy pgvector pydantic pydantic-settings redis structlog
+
+      - name: Run Alembic Migrations
+        run: alembic -c packages/db/alembic/alembic.ini upgrade head
+
+      - name: Run Package Tests
+        run: pytest packages/ -v
+
+  test-gateway:
+    name: Test Gateway Service
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: prohuman
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman
+      GATEWAY_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman
+      REDIS_URL: redis://localhost:6379/0
+      GATEWAY_REDIS_URL: redis://localhost:6379/0
+      S3_ENDPOINT_URL: http://localhost:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET_NAME: audio-recordings
+      PYTHONPATH: .:services/gateway
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio httpx
+          pip install -e ./services/gateway
+
+      - name: Run Gateway Tests
+        run: pytest services/gateway/ -v
+
+  test-worker:
+    name: Test Worker Service
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: prohuman
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman
+      WORKER_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman
+      REDIS_URL: redis://localhost:6379/0
+      WORKER_REDIS_URL: redis://localhost:6379/0
+      S3_ENDPOINT_URL: http://localhost:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET_NAME: audio-recordings
+      PYTHONPATH: .:services/worker
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio
+          pip install -e ./services/worker
+
+      - name: Run Worker Tests
+        run: pytest services/worker/ -v
+
+  test-agent:
+    name: Test Agent Service
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: prohuman
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman
+      AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman
+      REDIS_URL: redis://localhost:6379/0
+      AGENT_REDIS_URL: redis://localhost:6379/0
+      OPENAI_API_KEY: fake-ci-key
+      PYTHONPATH: .:services/agent
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio httpx
+          pip install -e ./services/agent
+
+      - name: Run Agent Tests
+        run: pytest services/agent/ -v
+
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: Build Gateway Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/gateway
+          file: ./services/gateway/Dockerfile
+          push: false
+          tags: prohuman/gateway:ci
+
+      - name: Build Worker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/worker
+          file: ./services/worker/Dockerfile
+          push: false
+          tags: prohuman/worker:ci
+
+      - name: Build Agent Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/agent
+          file: ./services/agent/Dockerfile
+          push: false
+          tags: prohuman/agent:ci
