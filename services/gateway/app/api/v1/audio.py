@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
-from typing import Any
+from pathlib import Path
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, UploadFile, File, Form, Header
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, UploadFile, File, Header
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,13 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db, get_redis, get_storage, get_session_repo
 from app.services.storage import S3StorageService
 from app.services.task_dispatcher import TaskDispatcher
-from app.services.audio_validator import AudioValidator, ValidationResult
 from packages.contracts.audio import AudioFormat, AudioSessionConfig
 from packages.db.repositories.session_repo import SessionRepository
 from packages.db.models.session import SessionStatusEnum
 from packages.db.models.audio_chunk import AudioChunk
+from app.config import get_settings
 
 router = APIRouter()
+MAX_AUDIO_FILE_SIZE_BYTES = 100 * 1024 * 1024
 
 @router.websocket("/stream/{session_id}")
 async def audio_stream(
@@ -46,60 +46,54 @@ async def audio_stream(
         await websocket.close(code=4000, reason="Invalid config")
         return
 
-    queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
-    validator = AudioValidator()
-    chunk_index = 0
-    
-    async def process_queue() -> None:
-        nonlocal chunk_index
-        while True:
-            chunk = await queue.get()
-            if chunk == b"__EOF__":
-                break
-                
-            validation: ValidationResult = validator.validate_chunk(chunk, config.format)
-            if validation.valid:
-                # Upload to S3
-                s3_key = await storage.upload_chunk(session_id, chunk_index, chunk, "application/octet-stream")
-                
-                # Compute hash
-                checksum = hashlib.sha256(chunk).hexdigest()
-                
-                # Insert chunk (idempotent setup assuming db constraint)
-                db_chunk = AudioChunk(
-                    session_id=session_id,
-                    chunk_index=chunk_index,
-                    s3_key=s3_key,
-                    checksum=checksum,
-                    size_bytes=len(chunk)
-                )
-                db.add(db_chunk)
-                await db.commit()
-                chunk_index += 1
-            queue.task_done()
+    await session_repo.update(session_id, status=SessionStatusEnum.RECORDING)
+    await db.commit()
+    audio_data = bytearray()
 
-    processor_task = asyncio.create_task(process_queue())
-
+    too_large = False
     try:
         while True:
             data = await websocket.receive_bytes()
-            # backpressure
-            await queue.put(data)
+            if len(audio_data) + len(data) > MAX_AUDIO_FILE_SIZE_BYTES:
+                await websocket.close(code=1009, reason="Recording exceeds 100 MB limit")
+                too_large = True
+                break
+            audio_data.extend(data)
     except WebSocketDisconnect:
         pass
-    finally:
-        await queue.put(b"__EOF__")
-        await processor_task
-        
-        # Dispatch transcription task
-        dispatcher = TaskDispatcher(redis)
-        # We might have multiple chunks, typically we'd dispatch per chunk or batch
-        await dispatcher.dispatch_transcription(session_id, f"{session_id}/latest")
-        
-        # Finalize session
-        session.status = SessionStatusEnum.PROCESSING
-        await session_repo.update(session_id, status=SessionStatusEnum.PROCESSING)
+
+    if too_large or not audio_data:
+        await session_repo.update(session_id, status=SessionStatusEnum.FAILED)
         await db.commit()
+        return
+
+    content_type = "audio/webm" if config.format == AudioFormat.OPUS else "audio/wav"
+    filename = "recording.webm" if config.format == AudioFormat.OPUS else "recording.wav"
+    s3_key = await storage.upload_file(session_id, filename, bytes(audio_data), content_type)
+    db.add(
+        AudioChunk(
+            session_id=session_id,
+            chunk_index=0,
+            s3_key=s3_key,
+            checksum=hashlib.sha256(audio_data).hexdigest(),
+            size_bytes=len(audio_data),
+        )
+    )
+    await session_repo.update(
+        session_id,
+        status=SessionStatusEnum.PROCESSING,
+        s3_key=s3_key,
+        audio_format=config.format.value,
+    )
+    await db.commit()
+
+    dispatcher = TaskDispatcher(redis, get_settings().redis_url)
+    try:
+        await dispatcher.dispatch_transcription(session_id, s3_key)
+    except Exception as exc:
+        await session_repo.update(session_id, status=SessionStatusEnum.FAILED)
+        await db.commit()
+        raise HTTPException(status_code=503, detail="Could not queue audio transcription") from exc
 
 @router.post("/{session_id}/upload")
 async def upload_audio(
@@ -121,12 +115,15 @@ async def upload_audio(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
-    data = await file.read()
-    validator = AudioValidator()
-    if not validator.validate_chunk(data).valid:
-        raise HTTPException(status_code=400, detail="Invalid audio format")
-        
-    s3_key = await storage.upload_file(session_id, file.filename or "upload.wav", data, file.content_type or "audio/wav")
+    data = await file.read(MAX_AUDIO_FILE_SIZE_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="Audio file is empty")
+    if len(data) > MAX_AUDIO_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="Audio file exceeds 100 MB limit")
+
+    filename = Path(file.filename or "audio-upload").name
+    content_type = file.content_type or "application/octet-stream"
+    s3_key = await storage.upload_file(session_id, filename, data, content_type)
     
     db_chunk = AudioChunk(
         session_id=session_id,
@@ -138,10 +135,17 @@ async def upload_audio(
     db.add(db_chunk)
     
     session.status = SessionStatusEnum.PROCESSING
+    session.s3_key = s3_key
+    session.audio_format = content_type
     await db.commit()
     
-    dispatcher = TaskDispatcher(redis)
-    await dispatcher.dispatch_transcription(session_id, s3_key)
+    dispatcher = TaskDispatcher(redis, get_settings().redis_url)
+    try:
+        await dispatcher.dispatch_transcription(session_id, s3_key)
+    except Exception as exc:
+        await session_repo.update(session_id, status=SessionStatusEnum.FAILED)
+        await db.commit()
+        raise HTTPException(status_code=503, detail="Could not queue audio transcription") from exc
     
     return JSONResponse(status_code=201, content={"session_id": session_id, "status": "processing"})
 

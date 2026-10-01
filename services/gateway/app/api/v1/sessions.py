@@ -4,14 +4,23 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
+from redis.asyncio import Redis
 
-from app.dependencies import get_db, get_session_repo
+from app.dependencies import get_redis, get_session_repo
+from app.config import get_settings
 from packages.contracts.sessions import SessionCreate, SessionResponse, SessionDetail, SessionListResponse
 from packages.db.repositories.session_repo import SessionRepository
 from packages.db.models.session import SessionStatusEnum, Session
+from app.services.task_dispatcher import TaskDispatcher
+from pydantic import BaseModel, Field
 
 router = APIRouter()
+
+
+class FeatureRequest(BaseModel):
+    feature_names: list[str] = Field(default_factory=lambda: ["mom"])
+    force: bool = False
+
 
 @router.post("", response_model=SessionResponse, status_code=201)
 async def create_session(
@@ -46,9 +55,51 @@ async def get_session(
         audio_format=session.audio_format,
         duration_seconds=session.duration_seconds,
         transcript_segment_count=len(session.transcript_segments) if session.transcript_segments else 0,
-        feature_results=[f.feature_name for f in session.feature_results] if session.feature_results else [],
+        transcript_segments=[
+            {
+                "id": str(segment.id),
+                "speaker_label": segment.speaker_label,
+                "text": segment.text,
+                "start_time": segment.start_time,
+                "end_time": segment.end_time,
+                "confidence": segment.confidence,
+            }
+            for segment in session.transcript_segments or []
+        ],
+        feature_results={
+            feature_name: result.data
+            for feature_name, result in {
+                feature.feature_name: feature
+                for feature in sorted(
+                    session.feature_results or [],
+                    key=lambda item: item.version,
+                )
+            }.items()
+        },
         s3_key=session.s3_key
     )
+
+
+@router.post("/{session_id}/features", status_code=202)
+async def generate_features(
+    session_id: UUID,
+    request: FeatureRequest,
+    redis: Redis = Depends(get_redis),
+    session_repo: SessionRepository = Depends(get_session_repo),
+) -> dict[str, str]:
+    session = await session_repo.get_with_details(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.transcript_segments:
+        raise HTTPException(status_code=409, detail="Session has no transcript to analyze")
+
+    dispatcher = TaskDispatcher(redis, get_settings().redis_url)
+    await dispatcher.dispatch_feature_pipeline(
+        str(session_id),
+        request.feature_names,
+        force=request.force,
+    )
+    return {"session_id": str(session_id), "status": "queued"}
 
 @router.get("", response_model=SessionListResponse)
 async def list_sessions(

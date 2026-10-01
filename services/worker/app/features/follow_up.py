@@ -28,7 +28,7 @@ class FollowUpProvider(BaseFeatureProvider):
         
         segments = transcript_data.get('transcript', [])
         transcript_text = "\n".join([
-            f"Speaker {seg.speaker_id}: {seg.text}" for seg in segments
+            f"Speaker {seg.speaker_label}: {seg.text}" for seg in segments
         ])
 
         messages = [

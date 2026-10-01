@@ -67,26 +67,25 @@ export interface SearchResult {
   text_rank?: number;
 }
 
-import { 
-  SAMPLE_SESSIONS, 
-  SAMPLE_TRANSCRIPTS, 
-  SAMPLE_MOM, 
-  SAMPLE_SEARCH_RESULTS, 
-  SAMPLE_AGENT_RESPONSES 
-} from './sampleData';
-
 export const API_BASE = '/api/v1';
 
-export async function fetchSessions(): Promise<Session[]> {
+async function ensureOk(response: Response): Promise<void> {
+  if (response.ok) return;
+  let message = `${response.status} ${response.statusText}`;
   try {
-    const res = await fetch(`${API_BASE}/sessions`, { signal: AbortSignal.timeout(1500) });
-    if (!res.ok) throw new Error('Failed to fetch sessions');
-    const data = await res.json();
-    if (data.sessions && data.sessions.length > 0) return data.sessions;
-  } catch (err) {
-    console.info('Backend unavailable or empty. Loading sample test sessions.');
+    const body = await response.json();
+    message = body.detail || body.message || message;
+  } catch {
+    // Preserve the HTTP status when an error response has no JSON body.
   }
-  return SAMPLE_SESSIONS;
+  throw new Error(message);
+}
+
+export async function fetchSessions(): Promise<Session[]> {
+  const response = await fetch(`${API_BASE}/sessions`, { signal: AbortSignal.timeout(10000) });
+  await ensureOk(response);
+  const data: { sessions: Session[] } = await response.json();
+  return data.sessions;
 }
 
 export async function fetchSessionDetails(sessionId: string): Promise<{
@@ -94,124 +93,93 @@ export async function fetchSessionDetails(sessionId: string): Promise<{
   segments: TranscriptSegment[];
   mom: MOMData | null;
 }> {
-  try {
-    const res = await fetch(`${API_BASE}/sessions/${sessionId}`, { signal: AbortSignal.timeout(1500) });
-    if (res.ok) {
-      const data = await res.json();
-      return {
-        session: data,
-        segments: data.transcript_segments || [],
-        mom: data.feature_results?.mom || null
-      };
-    }
-  } catch (err) {
-    console.info('Using sample transcript & MOM data for session:', sessionId);
-  }
-
-  const sampleSession = SAMPLE_SESSIONS.find((s) => s.id === sessionId) || SAMPLE_SESSIONS[0];
-  const sampleSegments = SAMPLE_TRANSCRIPTS[sessionId] || SAMPLE_TRANSCRIPTS['a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'] || [];
-  const sampleMom = SAMPLE_MOM[sessionId] || SAMPLE_MOM['a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d'] || null;
-
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}`, { signal: AbortSignal.timeout(10000) });
+  await ensureOk(response);
+  const data = await response.json();
   return {
-    session: sampleSession,
-    segments: sampleSegments,
-    mom: sampleMom
+    session: data as Session,
+    segments: (data.transcript_segments || []) as TranscriptSegment[],
+    mom: (data.feature_results?.mom || null) as MOMData | null,
   };
 }
 
 export async function createSession(deviceId: string = 'web-gadget-01'): Promise<Session> {
-  try {
-    const res = await fetch(`${API_BASE}/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        device_id: deviceId,
-        audio_format: 'WAV',
-        sample_rate: 16000,
-      }),
-      signal: AbortSignal.timeout(2000),
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {
-    console.info('Using local simulated session ID for testing.');
-  }
-
-  // Fallback demo session
-  return {
-    id: `sim-${Date.now().toString(36)}`,
-    device_id: deviceId,
-    status: 'RECORDING',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    audio_format: 'WAV',
-    duration_seconds: 0,
-  };
+  const response = await fetch(`${API_BASE}/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      device_id: deviceId,
+      audio_format: 'OPUS',
+      sample_rate: 16000,
+    }),
+    signal: AbortSignal.timeout(10000),
+  });
+  await ensureOk(response);
+  return response.json();
 }
 
-export async function uploadAudioFile(sessionId: string, file: File): Promise<any> {
+export async function uploadAudioFile(
+  sessionId: string,
+  file: File,
+): Promise<{ session_id: string; status: string }> {
   const formData = new FormData();
   formData.append('file', file);
-  try {
-    const res = await fetch(`${API_BASE}/audio/${sessionId}/upload`, {
-      method: 'POST',
-      body: formData,
-      signal: AbortSignal.timeout(3000),
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {
-    console.info('Backend upload endpoint offline; simulated mock upload completed.');
-  }
-
-  return {
-    session_id: sessionId,
-    status: 'processing',
-    file_name: file.name,
-    bytes: file.size,
-  };
+  const response = await fetch(`${API_BASE}/audio/${sessionId}/upload`, {
+    method: 'POST',
+    body: formData,
+    signal: AbortSignal.timeout(120000),
+  });
+  await ensureOk(response);
+  return response.json();
 }
 
-export async function runHybridSearch(query: string, mode: string = 'HYBRID'): Promise<SearchResult[]> {
-  try {
-    const res = await fetch(`${API_BASE}/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        search_mode: mode,
-        limit: 15,
-      }),
-      signal: AbortSignal.timeout(2000),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return data.results || [];
-    }
-  } catch (err) {
-    console.info('Search API offline; serving sample search results.');
-  }
-
-  return SAMPLE_SEARCH_RESULTS.filter(
-    (item) => item.text.toLowerCase().includes(query.toLowerCase()) || query.length < 4
-  ).concat(SAMPLE_SEARCH_RESULTS);
+export async function runHybridSearch(
+  query: string,
+  mode: 'HYBRID' | 'SEMANTIC' | 'LEXICAL' = 'HYBRID',
+): Promise<SearchResult[]> {
+  const response = await fetch(`${API_BASE}/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      search_mode: mode,
+      limit: 15,
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+  await ensureOk(response);
+  const data: { results: SearchResult[] } = await response.json();
+  return data.results;
 }
 
-export async function queryAgent(query: string, userId: string = 'user-01'): Promise<any> {
-  try {
-    const res = await fetch(`${API_BASE}/agent/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        user_id: userId,
-      }),
-      signal: AbortSignal.timeout(3000),
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {
-    console.info('Agent API offline; serving contextual simulated agent answer.');
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, 600));
-  return SAMPLE_AGENT_RESPONSES.default;
+export async function generateMom(sessionId: string, force = false): Promise<void> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/features`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ feature_names: ['mom'], force }),
+    signal: AbortSignal.timeout(10000),
+  });
+  await ensureOk(response);
 }
 
+export interface AgentResponse {
+  response: string;
+  query_id: string;
+  tool_calls_count: number;
+  tokens_used: number;
+  latency_ms: number;
+}
+
+export async function queryAgent(query: string, userId: string = 'user-01'): Promise<AgentResponse> {
+  const response = await fetch(`${API_BASE}/agent/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      user_id: userId,
+    }),
+    signal: AbortSignal.timeout(120000),
+  });
+  await ensureOk(response);
+  return response.json();
+}

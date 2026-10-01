@@ -8,6 +8,7 @@ export const SearchExplorer: React.FC = () => {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -16,11 +17,12 @@ export const SearchExplorer: React.FC = () => {
     try {
       setIsSearching(true);
       setHasSearched(true);
+      setSearchError(null);
       const res = await runHybridSearch(query.trim(), searchMode);
       setResults(res);
-    } catch (err) {
-      console.error(err);
+    } catch (err: unknown) {
       setResults([]);
+      setSearchError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsSearching(false);
     }
@@ -87,12 +89,19 @@ export const SearchExplorer: React.FC = () => {
       {/* Results List */}
       {hasSearched && (
         <div className="space-y-3">
+          {searchError && (
+            <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+              Search failed: {searchError}
+            </p>
+          )}
           <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-2">
             <span>Query Results ({results.length} matches)</span>
             <span className="font-mono">Ranking via Reciprocal Rank Fusion</span>
           </div>
 
-          {results.length > 0 ? (
+          {isSearching ? (
+            <div className="text-center py-8 text-slate-400 text-sm">Searching conversation history...</div>
+          ) : results.length > 0 ? (
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
               {results.map((res: SearchResult, idx: number) => (
                 <div key={res.segment_id || idx} className="bg-slate-950/70 border border-slate-800/80 p-4 rounded-lg hover:border-slate-700 transition">
@@ -120,11 +129,11 @@ export const SearchExplorer: React.FC = () => {
                 </div>
               ))}
             </div>
-          ) : (
+          ) : !searchError ? (
             <div className="text-center py-8 text-slate-500 text-sm">
               No matching conversation turns found. Try adjusting the query or search mode.
             </div>
-          )}
+          ) : null}
         </div>
       )}
     </div>

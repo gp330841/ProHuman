@@ -49,7 +49,7 @@ class DeepgramAdapter(BaseSTTAdapter):
                 segments = []
                 speaker_set = set()
                 
-                for u in utterances:
+                for segment_index, u in enumerate(utterances):
                     speaker_id = str(u.get("speaker", 0))
                     speaker_set.add(speaker_id)
                     
@@ -57,13 +57,14 @@ class DeepgramAdapter(BaseSTTAdapter):
                     for w in u.get("words", []):
                         words.append(WordTimestamp(
                             word=w.get("word", ""),
-                            start_time=float(w.get("start", 0)),
-                            end_time=float(w.get("end", 0)),
+                            start=float(w.get("start", 0)),
+                            end=float(w.get("end", 0)),
                             confidence=float(w.get("confidence", 0.0))
                         ))
                     
                     segments.append(TranscriptSegment(
-                        speaker_id=speaker_id,
+                        segment_index=segment_index,
+                        speaker_label=f"speaker_{speaker_id}",
                         text=u.get("transcript", ""),
                         start_time=float(u.get("start", 0)),
                         end_time=float(u.get("end", 0)),

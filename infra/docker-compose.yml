@@ -79,6 +79,7 @@ services:
       GATEWAY_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-audio-recordings}
       GATEWAY_S3_BUCKET_NAME: ${S3_BUCKET_NAME:-audio-recordings}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GATEWAY_LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PYTHONPATH: /app
     volumes:

@@ -33,6 +33,7 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
         session_ids: list[UUID] | None = None,
         time_range_start: datetime | None = None,
         time_range_end: datetime | None = None,
+        search_mode: str = "HYBRID",
         rrf_k: int = 60
     ) -> list[dict]:
         # Implementation of full RRF SQL query
@@ -40,13 +41,15 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
         WITH vector_search AS (
             SELECT
                 id,
-                1.0 / (:rrf_k + ROW_NUMBER() OVER (ORDER BY embedding <#> CAST(:query_embedding AS vector))) as vector_score,
-                ROW_NUMBER() OVER (ORDER BY embedding <#> CAST(:query_embedding AS vector)) as vector_rank
+                1.0 / (:rrf_k + ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:query_embedding AS vector))) as vector_score,
+                ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:query_embedding AS vector)) as vector_rank
             FROM transcript_segments
-            WHERE (:session_ids_len = 0 OR session_id = ANY(:session_ids))
+            WHERE embedding IS NOT NULL
+              AND :search_mode != 'LEXICAL'
+              AND (:session_ids_len = 0 OR session_id = ANY(:session_ids))
               AND (:time_start IS NULL OR created_at >= :time_start)
               AND (:time_end IS NULL OR created_at <= :time_end)
-            ORDER BY embedding <#> CAST(:query_embedding AS vector)
+            ORDER BY embedding <=> CAST(:query_embedding AS vector)
             LIMIT :sub_limit
         ),
         text_search AS (
@@ -55,7 +58,8 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
                 1.0 / (:rrf_k + ROW_NUMBER() OVER (ORDER BY ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) DESC)) as text_score,
                 ROW_NUMBER() OVER (ORDER BY ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) DESC) as text_rank
             FROM transcript_segments
-            WHERE search_vector @@ websearch_to_tsquery('english', :query_text)
+            WHERE :search_mode != 'SEMANTIC'
+              AND search_vector @@ websearch_to_tsquery('english', :query_text)
               AND (:session_ids_len = 0 OR session_id = ANY(:session_ids))
               AND (:time_start IS NULL OR created_at >= :time_start)
               AND (:time_end IS NULL OR created_at <= :time_end)
@@ -85,6 +89,7 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
         params = {
             "query_text": query_text,
             "query_embedding": str(query_embedding),
+            "search_mode": search_mode,
             "limit": limit,
             "offset": offset,
             "rrf_k": rrf_k,

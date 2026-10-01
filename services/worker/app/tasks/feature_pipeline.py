@@ -16,7 +16,11 @@ from packages.contracts.transcription import TranscriptSegment
 
 logger = structlog.get_logger(__name__)
 
-async def _run_feature_pipeline_async(session_id: str, feature_names: list[str] | None = None) -> None:
+async def _run_feature_pipeline_async(
+    session_id: str,
+    feature_names: list[str] | None = None,
+    force: bool = False,
+) -> None:
     async with get_db_context() as db:
         session_repo = SessionRepository(db)
         transcript_repo = TranscriptRepository(db)
@@ -61,7 +65,7 @@ async def _run_feature_pipeline_async(session_id: str, feature_names: list[str] 
 
             # Idempotency
             existing = await feature_repo.get_by_session_and_name(session_id, name)
-            if existing:
+            if existing and not force:
                 logger.info("feature_already_extracted", feature=name, session_id=session_id)
                 continue
 
@@ -69,7 +73,7 @@ async def _run_feature_pipeline_async(session_id: str, feature_names: list[str] 
                 result = await provider.process(session_id, transcript_data)
                 
                 # Use standard Pydantic dumping if needed or if result is BaseModel
-                data_dict = result.model_dump() if hasattr(result, 'model_dump') else result
+                data_dict = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
                 
                 next_version = await feature_repo.get_latest_version(session_id, name) + 1
                 feature_model = FeatureResultModel(
@@ -89,8 +93,13 @@ async def _run_feature_pipeline_async(session_id: str, feature_names: list[str] 
         await db.commit()
 
 @celery_app.task(bind=True, max_retries=3, acks_late=True, queue='features')
-def run_feature_pipeline(self, session_id: str, feature_names: list[str] | None = None) -> None:
+def run_feature_pipeline(
+    self,
+    session_id: str,
+    feature_names: list[str] | None = None,
+    force: bool = False,
+) -> None:
     try:
-        async_to_sync(_run_feature_pipeline_async)(session_id, feature_names)
+        async_to_sync(_run_feature_pipeline_async)(session_id, feature_names, force)
     except Exception as exc:
         self.retry(exc=exc, countdown=2 ** self.request.retries)

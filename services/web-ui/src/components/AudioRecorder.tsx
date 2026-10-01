@@ -1,6 +1,6 @@
-import React, { useState, useRef } from 'react';
-import { Mic, Square, Upload, Radio, CheckCircle } from 'lucide-react';
-import { createSession, uploadAudioFile, Session } from '../api/client';
+import React, { useRef, useState } from 'react';
+import { CheckCircle, Mic, Radio, Square, Upload } from 'lucide-react';
+import { createSession, Session, uploadAudioFile } from '../api/client';
 
 interface Props {
   onSessionCreated?: (session: Session) => void;
@@ -11,91 +11,129 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [chunksSent, setChunksSent] = useState(0);
   const [bytesSent, setBytesSent] = useState(0);
-  const [statusMessage, setStatusMessage] = useState<string>('Ready to capture audio');
+  const [statusMessage, setStatusMessage] = useState('Ready to capture audio');
   const [isUploading, setIsUploading] = useState(false);
-
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const stoppingRef = useRef(false);
 
   const startLiveStreaming = async () => {
     try {
-      setStatusMessage('Initializing new audio session...');
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+        throw new Error('This browser does not support microphone recording.');
+      }
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm'].find((type) =>
+        MediaRecorder.isTypeSupported(type),
+      );
+      if (!mimeType) throw new Error('This browser cannot record WebM audio.');
+
+      setStatusMessage('Requesting microphone access...');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      setStatusMessage('Creating audio session...');
       const newSession = await createSession('browser-mic-gadget');
       setSession(newSession);
-      if (onSessionCreated) onSessionCreated(newSession);
+      onSessionCreated?.(newSession);
 
-      // Open WebSocket connection
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${window.location.host}/api/v1/audio/stream/${newSession.id}`;
-      const ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-      wsRef.current = ws;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(
+        `${protocol}//${window.location.host}/api/v1/audio/stream/${newSession.id}`,
+      );
+      wsRef.current = socket;
+      stoppingRef.current = false;
+      setChunksSent(0);
+      setBytesSent(0);
 
-      ws.onopen = async () => {
-        setStatusMessage('WebSocket connected. Sending audio handshake...');
-        // Send initial AudioSessionConfig handshake
-        ws.send(JSON.stringify({
-          format: 'WAV',
-          sample_rate: 16000,
-          channels: 1,
-          chunk_size_bytes: 4096
-        }));
+      await new Promise<void>((resolve, reject) => {
+        let didOpen = false;
+        socket.onopen = () => {
+          didOpen = true;
+          socket.send(JSON.stringify({
+            format: 'OPUS',
+            sample_rate: 16000,
+            channels: 1,
+            chunk_size_bytes: 4096,
+          }));
 
-        // Access microphone
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-        mediaRecorderRef.current = mediaRecorder;
+          const recorder = new MediaRecorder(stream, { mimeType });
+          mediaRecorderRef.current = recorder;
+          let chunkCount = 0;
+          let byteCount = 0;
+          let pendingChunk = Promise.resolve();
 
-        let sentCount = 0;
-        let totalBytes = 0;
+          recorder.ondataavailable = (event) => {
+            if (event.data.size === 0 || socket.readyState !== WebSocket.OPEN) return;
+            pendingChunk = pendingChunk.then(async () => {
+              const chunk = await event.data.arrayBuffer();
+              if (socket.readyState !== WebSocket.OPEN) return;
+              socket.send(chunk);
+              chunkCount += 1;
+              byteCount += chunk.byteLength;
+              setChunksSent(chunkCount);
+              setBytesSent(byteCount);
+            });
+          };
+          recorder.onerror = () => {
+            setStatusMessage('Microphone recording failed.');
+            stopLiveStreaming();
+          };
+          recorder.onstop = async () => {
+            await pendingChunk;
+            stream.getTracks().forEach((track) => track.stop());
+            streamRef.current = null;
+            if (socket.readyState === WebSocket.OPEN) socket.close();
+          };
 
-        mediaRecorder.ondataavailable = async (e) => {
-          if (e.data && e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-            const arrayBuffer = await e.data.arrayBuffer();
-            ws.send(arrayBuffer);
-            sentCount++;
-            totalBytes += arrayBuffer.byteLength;
-            setChunksSent(sentCount);
-            setBytesSent(totalBytes);
+          recorder.start(250);
+          setIsRecording(true);
+          setStatusMessage('Streaming microphone audio to the gateway...');
+          resolve();
+        };
+        socket.onerror = () => {
+          if (!didOpen) reject(new Error('Could not connect to the audio gateway.'));
+          else setStatusMessage('Audio gateway connection failed.');
+        };
+        socket.onclose = (event) => {
+          if (!didOpen) {
+            reject(new Error(event.reason || 'Audio gateway rejected the connection.'));
+          } else if (stoppingRef.current) {
+            setStatusMessage('Recording uploaded. Transcription has been queued.');
+          } else {
+            setStatusMessage(event.reason || 'Audio connection closed unexpectedly.');
+            setIsRecording(false);
+            if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
+            stream.getTracks().forEach((track) => track.stop());
+            streamRef.current = null;
           }
         };
-
-        mediaRecorder.start(250); // Emit chunk every 250ms
-        setIsRecording(true);
-        setStatusMessage('Streaming audio live to Ingestion Gateway...');
-      };
-
-      ws.onerror = (err) => {
-        console.error('WebSocket error:', err);
-        setStatusMessage('WebSocket streaming error');
-      };
-
-      ws.onclose = () => {
-        setStatusMessage('Audio stream closed');
-      };
-
-    } catch (err: any) {
-      console.error(err);
-      setStatusMessage(`Error starting recording: ${err.message}`);
+      });
+    } catch (error: unknown) {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      wsRef.current?.close();
+      setIsRecording(false);
+      setStatusMessage(
+        `Could not start recording: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   };
 
   const stopLiveStreaming = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream.getTracks().forEach((t: MediaStreamTrack) => t.stop());
+    stoppingRef.current = true;
+    setStatusMessage('Finishing audio upload...');
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+      return;
     }
-
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.close();
-    }
-
-    setIsRecording(false);
-    setStatusMessage('Recording ended. Processing dispatched to Celery pipeline!');
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
     if (!file) return;
 
     try {
@@ -103,15 +141,15 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated }) => {
       setStatusMessage('Creating upload session...');
       const newSession = await createSession('file-upload-gadget');
       setSession(newSession);
-      if (onSessionCreated) onSessionCreated(newSession);
-
+      onSessionCreated?.(newSession);
       setStatusMessage(`Uploading audio file (${(file.size / 1024).toFixed(1)} KB)...`);
       await uploadAudioFile(newSession.id, file);
-      setStatusMessage('File uploaded successfully! Transcribing with Nova-2...');
-    } catch (err: any) {
-      setStatusMessage(`Upload failed: ${err.message}`);
+      setStatusMessage('File uploaded. Transcription has been queued.');
+    } catch (error: unknown) {
+      setStatusMessage(`Upload failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsUploading(false);
+      event.target.value = '';
     }
   };
 
@@ -119,8 +157,8 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated }) => {
     <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 shadow-xl backdrop-blur">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold flex items-center gap-2 text-white">
-          <Radio className="w-5 h-5 text-sky-400 animate-pulse" />
-          Hardware Gadget Ingestion Simulator
+          <Radio className="w-5 h-5 text-sky-400" />
+          Audio ingestion
         </h2>
         {session && (
           <span className="text-xs bg-slate-800 text-slate-300 px-3 py-1 rounded-full border border-slate-700 font-mono">
@@ -130,37 +168,36 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated }) => {
       </div>
 
       <p className="text-sm text-slate-400 mb-6">
-        Test audio streaming over WebSockets or upload audio files to trigger real-time VAD, MinIO S3 storage, Deepgram Nova-2 diarization, and pgvector embeddings.
+        Stream browser microphone audio or upload a recording. Audio is stored and queued for
+        transcription, embedding, and meeting analysis.
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        {/* Live Mic Recorder Card */}
         <div className="bg-slate-950/60 border border-slate-800 p-5 rounded-lg flex flex-col justify-between">
           <div>
-            <span className="text-xs uppercase font-semibold tracking-wider text-sky-400">Option 1</span>
-            <h3 className="text-base font-semibold text-white mt-1">Live Microphone WebSocket Stream</h3>
+            <span className="text-xs uppercase font-semibold tracking-wider text-sky-400">Live audio</span>
+            <h3 className="text-base font-semibold text-white mt-1">Microphone stream</h3>
             <p className="text-xs text-slate-400 mt-1">
-              Captures browser microphone audio frames and streams raw binary chunks to <code>/api/v1/audio/stream</code>.
+              Captures browser WebM/Opus audio and streams it to the gateway over WebSocket.
             </p>
           </div>
-
           <div className="mt-4 pt-4 border-t border-slate-800/80 flex items-center gap-3">
             {!isRecording ? (
               <button
                 onClick={startLiveStreaming}
-                className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-medium rounded-lg text-sm transition shadow-lg shadow-sky-900/20"
+                disabled={isUploading}
+                className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 text-white font-medium rounded-lg text-sm transition"
               >
-                <Mic className="w-4 h-4" /> Start Recording
+                <Mic className="w-4 h-4" /> Start recording
               </button>
             ) : (
               <button
                 onClick={stopLiveStreaming}
-                className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-medium rounded-lg text-sm transition animate-pulse"
+                className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-medium rounded-lg text-sm transition"
               >
-                <Square className="w-4 h-4" /> Stop & Finalize
+                <Square className="w-4 h-4" /> Stop & finalize
               </button>
             )}
-
             {isRecording && (
               <div className="flex items-center gap-4 text-xs font-mono text-slate-400">
                 <span>Chunks: <b className="text-sky-400">{chunksSent}</b></span>
@@ -170,20 +207,18 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated }) => {
           </div>
         </div>
 
-        {/* File Upload Card */}
         <div className="bg-slate-950/60 border border-slate-800 p-5 rounded-lg flex flex-col justify-between">
           <div>
-            <span className="text-xs uppercase font-semibold tracking-wider text-emerald-400">Option 2</span>
-            <h3 className="text-base font-semibold text-white mt-1">Direct Audio File Ingestion</h3>
+            <span className="text-xs uppercase font-semibold tracking-wider text-emerald-400">File upload</span>
+            <h3 className="text-base font-semibold text-white mt-1">Upload a recording</h3>
             <p className="text-xs text-slate-400 mt-1">
-              Upload pre-recorded Opus or WAV audio files through the chunked HTTP endpoint with idempotency verification.
+              Upload an audio file up to 100 MB to start the same transcription pipeline.
             </p>
           </div>
-
           <div className="mt-4 pt-4 border-t border-slate-800/80">
             <label className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-lg text-sm transition cursor-pointer w-fit border border-slate-700">
               <Upload className="w-4 h-4 text-emerald-400" />
-              {isUploading ? 'Uploading...' : 'Choose WAV / Opus File'}
+              {isUploading ? 'Uploading...' : 'Choose audio file'}
               <input
                 type="file"
                 accept="audio/*,.wav,.opus,.ogg"
@@ -196,7 +231,6 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated }) => {
         </div>
       </div>
 
-      {/* Realtime Status Bar */}
       <div className="flex items-center gap-2 bg-slate-950 px-4 py-2.5 rounded-lg border border-slate-800/80 text-xs">
         {isRecording ? (
           <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />

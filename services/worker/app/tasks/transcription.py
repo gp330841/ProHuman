@@ -52,7 +52,7 @@ async def _transcribe_session_async(session_id: str, s3_key: str) -> None:
                 TranscriptSegmentModel(
                     session_id=session_id,
                     segment_index=idx,
-                    speaker_label=seg.speaker_label or f"speaker_{seg.speaker_id}",
+                    speaker_label=seg.speaker_label,
                     text=seg.text,
                     start_time=seg.start_time,
                     end_time=seg.end_time,
@@ -72,8 +72,8 @@ async def _transcribe_session_async(session_id: str, s3_key: str) -> None:
             from app.tasks.embedding import generate_embeddings
             from app.tasks.feature_pipeline import run_feature_pipeline
             
-            generate_embeddings.delay(session_id)
-            run_feature_pipeline.delay(session_id)
+            generate_embeddings.apply_async(args=[session_id], queue="embedding")
+            run_feature_pipeline.apply_async(args=[session_id], queue="features")
             
         except Exception as e:
             logger.error("transcription_failed", session_id=session_id, error=str(e))

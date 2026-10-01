@@ -6,6 +6,7 @@ Connects Agent Tool calls to DB Repositories, LiteLLM/Instructor, and external s
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, date
 from typing import Any
@@ -19,6 +20,7 @@ from packages.db.repositories.feature_repo import FeatureRepository
 from app.tools.schemas import (
     SearchConversationsInput,
     SearchConversationsOutput,
+    SearchMode,
     SearchResultSegment,
     FetchConversationContextInput,
     FetchConversationContextOutput,
@@ -44,28 +46,28 @@ async def execute_search_conversations(
     input: SearchConversationsInput,
 ) -> SearchConversationsOutput:
     """Execute hybrid search using pgvector and PostgreSQL full-text search."""
-    dummy_embedding = [0.0] * 1536
-    try:
+    query_embedding = [0.0] * 1536
+    if input.search_mode != SearchMode.LEXICAL:
         import litellm
         resp = await litellm.aembedding(
             model="text-embedding-3-small",
             input=[input.query],
         )
-        if hasattr(resp, "data") and len(resp.data) > 0:
-            dummy_embedding = resp.data[0]["embedding"]
-    except Exception:
-        pass
+        if not resp.data:
+            raise RuntimeError("Embedding service returned no vector")
+        query_embedding = resp.data[0]["embedding"]
 
     async with get_db_context() as session:
         repo = TranscriptRepository(session)
         rows = await repo.hybrid_search(
             query_text=input.query,
-            query_embedding=dummy_embedding,
+            query_embedding=query_embedding,
             limit=input.limit,
             offset=input.offset,
             session_ids=input.session_ids,
             time_range_start=input.time_range_start,
             time_range_end=input.time_range_end,
+            search_mode=input.search_mode.value.upper(),
         )
 
         results: list[SearchResultSegment] = []
@@ -190,30 +192,32 @@ async def execute_generate_mom(
 
         trans_repo = TranscriptRepository(session)
         segments = await trans_repo.get_by_session(input.session_id)
+        if not segments:
+            raise ValueError(f"No transcript exists for session {input.session_id}")
         transcript_text = "\n".join([f"{s.speaker_label}: {s.text}" for s in segments])
 
-        mom_data = {
-            "title": f"Meeting {input.session_id}",
-            "attendees": list({s.speaker_label for s in segments}),
-            "agenda_items": [{"topic": "General Discussion", "summary": "Key discussion points", "duration_seconds": None, "speakers_involved": []}],
-            "decisions": [{"description": "Proceed with deployment plan", "made_by": "speaker_0", "context_quote": None, "confidence": 0.95, "timestamp": 12.5}],
-            "action_items": [{"description": "Review API endpoints", "assignee": "speaker_1", "deadline": None, "priority": "high", "confidence": 0.9, "source_quote": None, "status": "pending"}],
-            "follow_ups": [{"description": "Follow up next sprint", "responsible_party": "speaker_0", "due_context": "next standup", "linked_action_item_index": 0}],
-            "executive_summary": f"Discussion covering {len(segments)} segments.",
-        }
+        import litellm
 
-        try:
-            import litellm
-            messages = [
-                {"role": "system", "content": "Extract structured MOM JSON with title, attendees, agenda_items, decisions, action_items, follow_ups, executive_summary."},
-                {"role": "user", "content": transcript_text[:4000]},
-            ]
-            resp = await litellm.acompletion(model="gpt-4o", messages=messages, response_format={"type": "json_object"})
-            import json
-            parsed = json.loads(resp.choices[0].message.content)
-            mom_data.update(parsed)
-        except Exception:
-            pass
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Extract meeting notes as JSON with title, attendees, agenda_items, "
+                    "decisions, action_items, follow_ups, and executive_summary. "
+                    "Use only facts supported by the transcript."
+                ),
+            },
+            {"role": "user", "content": transcript_text[:12000]},
+        ]
+        response = await litellm.acompletion(
+            model="gpt-4o",
+            messages=messages,
+            response_format={"type": "json_object"},
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("The LLM returned an empty meeting-notes response")
+        mom_data = json.loads(content)
 
         next_ver = await feat_repo.get_latest_version(input.session_id, "mom") + 1
         await feat_repo.create(
@@ -227,14 +231,14 @@ async def execute_generate_mom(
         return GenerateMOMOutput(
             session_id=input.session_id,
             version=next_ver,
-            title=mom_data.get("title", "Meeting"),
+            title=mom_data["title"],
             date=datetime.utcnow(),
             attendees=mom_data.get("attendees", []),
             agenda_items=[AgendaItem(**a) for a in mom_data.get("agenda_items", [])],
             decisions=[ExtractedDecision(**dec) for dec in mom_data.get("decisions", [])],
             action_items=[ExtractedActionItem(**act) for act in mom_data.get("action_items", [])],
             follow_ups=[ExtractedFollowUp(**fu) for fu in mom_data.get("follow_ups", [])],
-            executive_summary=mom_data.get("executive_summary", ""),
+            executive_summary=mom_data["executive_summary"],
         )
 
 
@@ -307,18 +311,19 @@ async def execute_trigger_external(
             delivery_status="staged",
         )
 
-    try:
-        import httpx
-        if input.target == ExternalTarget.WEBHOOK and input.webhook_config:
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    input.webhook_config.url,
-                    json={"session_id": str(input.session_id), "content": preview},
-                    headers=input.webhook_config.headers or {},
-                    timeout=10.0,
-                )
-    except Exception:
-        pass
+    if input.target != ExternalTarget.WEBHOOK or not input.webhook_config:
+        raise NotImplementedError(f"External delivery to {input.target.value} is not configured")
+
+    import httpx
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            input.webhook_config.url,
+            json={"session_id": str(input.session_id), "content": preview},
+            headers=input.webhook_config.headers or {},
+            timeout=10.0,
+        )
+        response.raise_for_status()
 
     return TriggerExternalActionOutput(
         action_id=action_id,

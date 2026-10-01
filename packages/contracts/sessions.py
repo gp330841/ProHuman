@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from .audio import AudioFormat
 
 class SessionStatus(str, Enum):
@@ -36,7 +36,8 @@ class SessionResponse(BaseModel):
 
 class SessionDetail(SessionResponse):
     transcript_segment_count: int = 0
-    feature_results: list[str] = []
+    transcript_segments: list[dict[str, Any]] = Field(default_factory=list)
+    feature_results: dict[str, Any] = Field(default_factory=dict)
     s3_key: str | None = None
 
 class SessionListResponse(BaseModel):

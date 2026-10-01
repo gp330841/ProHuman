@@ -4,6 +4,7 @@ agent/api/v1/agent.py — Agent Query API Endpoint
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from typing import Any
@@ -129,8 +130,11 @@ async def query_agent(req: AgentQueryRequest):
     try:
         import litellm
         llm_client = litellm
-    except Exception:
-        pass
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="LLM client is not installed") from exc
+
+    if not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
 
     engine = AgentExecutionEngine(
         llm_client=llm_client,

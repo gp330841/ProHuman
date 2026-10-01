@@ -7,7 +7,6 @@ interface ChatMessage {
   sender: 'user' | 'agent';
   text: string;
   latencyMs?: number;
-  toolCalls?: Array<{ name: string; args: any; result?: any }>;
 }
 
 export const AgentChat: React.FC = () => {
@@ -15,7 +14,7 @@ export const AgentChat: React.FC = () => {
     {
       id: 'welcome',
       sender: 'agent',
-      text: "Hello! I am your Conversation Intelligence Agent. I can search across your meeting history, pull surrounding transcript context, track action items, or push meeting summaries to external tools.",
+      text: "Hello! I can search your processed meeting history, retrieve transcript context, find action items, and summarize recorded conversations.",
     },
   ]);
   const [inputQuery, setInputQuery] = useState('');
@@ -42,7 +41,6 @@ export const AgentChat: React.FC = () => {
         sender: 'agent',
         text: res.response || "No response generated.",
         latencyMs: res.latency_ms,
-        toolCalls: res.tool_calls || [],
       };
       setMessages((prev) => [...prev, agentMsg]);
     } catch (err: any) {
@@ -70,9 +68,8 @@ export const AgentChat: React.FC = () => {
             <p className="text-[11px] text-slate-400">Autonomous tool execution with Plan-and-Execute inner loop</p>
           </div>
         </div>
-        <span className="text-xs bg-emerald-500/10 text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1.5 font-mono">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          Engine Online
+        <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-full border border-slate-700 flex items-center gap-1.5 font-mono">
+          On-demand API
         </span>
       </div>
 
