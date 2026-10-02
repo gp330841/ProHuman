@@ -1,3 +1,9 @@
+"""
+SQLAlchemy declarative base and common mixins.
+
+Defines the core `Base` model, type mappings, and common mixins like
+`TimestampMixin` for audit fields.
+"""
 from __future__ import annotations
 
 from datetime import datetime

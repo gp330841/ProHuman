@@ -1,3 +1,6 @@
+"""
+Database model for tracking uploaded audio chunks.
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -12,6 +15,12 @@ if TYPE_CHECKING:
     from .session import Session
 
 class AudioChunk(Base, TimestampMixin):
+    """
+    Records an individual uploaded chunk of audio data.
+    
+    References the object storage location (e.g., S3 key) and ensures
+    consistency using checksums and sequence indices.
+    """
     __tablename__ = "audio_chunks"
     __table_args__ = (
         UniqueConstraint("session_id", "chunk_index", name="uq_chunk_session_index"),

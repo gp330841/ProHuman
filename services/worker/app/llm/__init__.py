@@ -1,1 +1,2 @@
+"""Worker LLM package."""
 # Empty

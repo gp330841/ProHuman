@@ -1,3 +1,6 @@
+"""
+Database model for recording sessions.
+"""
 from __future__ import annotations
 
 import enum
@@ -17,6 +20,7 @@ if TYPE_CHECKING:
     from .feature_result import FeatureResultModel
 
 class SessionStatusEnum(str, enum.Enum):
+    """Database representation of session lifecycle status."""
     CREATED = SessionStatus.CREATED.value
     RECORDING = SessionStatus.RECORDING.value
     PROCESSING = SessionStatus.PROCESSING.value
@@ -29,6 +33,12 @@ class SessionStatusEnum(str, enum.Enum):
     FAILED = SessionStatus.FAILED.value
 
 class Session(Base, TimestampMixin):
+    """
+    Represents an audio recording session.
+    
+    Acts as the root entity for all associated data including audio chunks,
+    transcript segments, and extracted features.
+    """
     __tablename__ = "sessions"
 
     id: Mapped[uuid_pk]

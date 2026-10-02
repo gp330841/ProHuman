@@ -1,3 +1,4 @@
+"""Module for feature_pipeline.py."""
 from __future__ import annotations
 
 import asyncio

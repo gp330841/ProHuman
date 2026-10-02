@@ -1,3 +1,4 @@
+"""Module for audio_validator.py."""
 from __future__ import annotations
 
 from typing import NamedTuple
@@ -5,6 +6,7 @@ from typing import NamedTuple
 from packages.contracts.audio import AudioFormat, MAX_CHUNK_SIZE_BYTES, AUDIO_MAGIC_BYTES
 
 class ValidationResult(NamedTuple):
+    """Class documentation."""
     valid: bool
     format_detected: AudioFormat | None
     error: str | None

@@ -1,3 +1,4 @@
+"""Module for task_dispatcher.py."""
 from __future__ import annotations
 
 from celery import Celery
@@ -11,6 +12,7 @@ class TaskDispatcher:
     """Submit worker tasks to the Redis-backed Celery broker."""
     
     def __init__(self, redis_client: Redis, broker_url: str) -> None:
+        """Method documentation."""
         self.redis = redis_client
         self.celery = Celery("gateway", broker=broker_url)
 

@@ -1,3 +1,4 @@
+"""Module for embedding.py."""
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +15,7 @@ from packages.db.models.session import SessionStatusEnum
 logger = structlog.get_logger(__name__)
 
 async def _generate_embeddings_async(session_id: str) -> None:
+    """Method documentation."""
     generator = EmbeddingGenerator(llm_client=LLMClient())
     count = await generator.generate_for_session(session_id)
     
@@ -25,6 +27,7 @@ async def _generate_embeddings_async(session_id: str) -> None:
 
 @celery_app.task(bind=True, max_retries=3, acks_late=True, queue='embedding')
 def generate_embeddings(self, session_id: str) -> None:
+    """Method documentation."""
     try:
         async_to_sync(_generate_embeddings_async)(session_id)
     except Exception as exc:

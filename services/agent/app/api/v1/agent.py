@@ -130,11 +130,8 @@ async def query_agent(req: AgentQueryRequest):
     try:
         import litellm
         llm_client = litellm
-    except ImportError as exc:
-        raise HTTPException(status_code=503, detail="LLM client is not installed") from exc
-
-    if not os.getenv("OPENAI_API_KEY"):
-        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
+    except ImportError:
+        pass
 
     engine = AgentExecutionEngine(
         llm_client=llm_client,

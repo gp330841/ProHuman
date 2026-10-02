@@ -1,3 +1,4 @@
+"""Gateway configuration module."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -8,6 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Gateway service settings."""
     model_config = SettingsConfigDict(env_prefix="GATEWAY_", env_file=".env", extra="ignore")
+
+    cors_origins: list[str] = ["*"]
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman"
     redis_url: str = "redis://localhost:6379/0"

@@ -1,1 +1,2 @@
+"""Worker embeddings package."""
 # Empty

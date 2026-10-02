@@ -1,3 +1,4 @@
+"""Module for error_handler.py."""
 from __future__ import annotations
 
 import uuid
@@ -23,6 +24,7 @@ def setup_error_handlers(app: FastAPI) -> None:
     
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        """Method documentation."""
         error_id = str(uuid.uuid4())
         await logger.awarning("validation_error", error_id=error_id, errors=exc.errors())
         return JSONResponse(
@@ -36,6 +38,7 @@ def setup_error_handlers(app: FastAPI) -> None:
         
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        """Method documentation."""
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail}
@@ -43,6 +46,7 @@ def setup_error_handlers(app: FastAPI) -> None:
         
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        """Method documentation."""
         error_id = str(uuid.uuid4())
         await logger.aerror("unhandled_error", error_id=error_id, error=str(exc))
         return JSONResponse(

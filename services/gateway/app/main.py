@@ -1,3 +1,4 @@
+"""Main entry point for gateway service."""
 from __future__ import annotations
 
 import logging
@@ -27,17 +28,45 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logging.basicConfig(level=settings.log_level)
     await logger.ainfo("Starting gateway service...")
     
-    # Resources are lazy-initialized in dependencies in reality,
-    # but we can do some global start up if needed here.
-    
+    engine = None
+    try:
+        from packages.db.engine import create_db_engine
+        from packages.db.base import Base
+        import packages.db.models  # noqa: F401
+        from sqlalchemy import text
+
+        engine = create_db_engine(settings.database_url)
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            await conn.run_sync(Base.metadata.create_all)
+        await logger.ainfo("Database tables & pgvector initialized successfully.")
+    except Exception as e:
+        await logger.aerror("Database initialization notice", error=str(e))
+
+    try:
+        from app.services.storage import S3StorageService
+        s3 = S3StorageService(
+            endpoint_url=settings.s3_endpoint_url,
+            access_key=settings.s3_access_key,
+            secret_key=settings.s3_secret_key,
+            bucket_name=settings.s3_bucket_name,
+        )
+        await s3.init()
+        await logger.ainfo("S3 bucket verified/created successfully.")
+    except Exception as e:
+        await logger.aerror("S3 bucket initialization notice", error=str(e))
+
     yield
     
     await logger.ainfo("Shutting down gateway service...")
+    if engine:
+        await engine.dispose()
     # Clean up resources
 
 
 def create_app() -> FastAPI:
     """Factory to create the FastAPI application."""
+    settings = get_settings()
     app = FastAPI(
         title="Gateway Service",
         description="Conversation Intelligence Platform Gateway",
@@ -48,14 +77,14 @@ def create_app() -> FastAPI:
     # Middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     
     # We add RateLimit middleware (need Redis so typically we pass it or resolve dynamically)
-    # app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(RateLimitMiddleware)
     
     setup_error_handlers(app)
 

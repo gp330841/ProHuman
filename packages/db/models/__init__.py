@@ -1,3 +1,8 @@
+"""
+SQLAlchemy ORM models.
+
+Contains all database schema definitions mapping to application entities.
+"""
 from __future__ import annotations
 
 from .session import Session, SessionStatusEnum

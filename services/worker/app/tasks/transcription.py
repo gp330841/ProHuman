@@ -1,3 +1,4 @@
+"""Module for transcription.py."""
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +18,7 @@ from packages.db.models.transcript import TranscriptSegment as TranscriptSegment
 logger = structlog.get_logger(__name__)
 
 async def _transcribe_session_async(session_id: str, s3_key: str) -> None:
+    """Method documentation."""
     async with get_db_context() as db:
         session_repo = SessionRepository(db)
         transcript_repo = TranscriptRepository(db)
@@ -27,8 +29,19 @@ async def _transcribe_session_async(session_id: str, s3_key: str) -> None:
             logger.info("session_already_transcribed", session_id=session_id)
             return
             
-        await session_repo.update_status(session_id, SessionStatusEnum.TRANSCRIBING)
-        await db.commit()
+        # Check if real Deepgram API key is provided
+        api_key = settings.deepgram_api_key or ""
+        if not api_key or "your_" in api_key or "placeholder" in api_key:
+            logger.info("no_deepgram_api_key_configured_skipping_backend_stt", session_id=session_id)
+            # Give browser a moment to submit transcript segments if streaming
+            await asyncio.sleep(2)
+            existing = await transcript_repo.get_by_session(session_id)
+            if existing:
+                await session_repo.update_status(session_id, SessionStatusEnum.TRANSCRIBED)
+                await db.commit()
+                from app.tasks.feature_pipeline import run_feature_pipeline
+                run_feature_pipeline.apply_async(args=[session_id], queue="features")
+            return
 
         try:
             # Get presigned URL via aiobotocore / boto3 or use audio_url directly
@@ -44,7 +57,7 @@ async def _transcribe_session_async(session_id: str, s3_key: str) -> None:
                     ExpiresIn=3600
                 )
             
-            adapter = DeepgramAdapter(api_key=settings.deepgram_api_key)
+            adapter = DeepgramAdapter(api_key=api_key)
             result = await adapter.transcribe(audio_url)
             
             # Bulk insert segments with matching database schema
@@ -83,6 +96,7 @@ async def _transcribe_session_async(session_id: str, s3_key: str) -> None:
 
 @celery_app.task(bind=True, max_retries=3, acks_late=True, queue='transcription')
 def transcribe_session(self, session_id: str, s3_key: str) -> None:
+    """Method documentation."""
     try:
         async_to_sync(_transcribe_session_async)(session_id, s3_key)
     except Exception as exc:

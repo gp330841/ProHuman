@@ -1,3 +1,4 @@
+"""Celery application configuration module."""
 from __future__ import annotations
 
 from celery import Celery

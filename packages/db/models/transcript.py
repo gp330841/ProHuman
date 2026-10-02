@@ -1,3 +1,6 @@
+"""
+Database model for transcript segments.
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -16,6 +19,12 @@ if TYPE_CHECKING:
 EMBEDDING_DIM = 1536
 
 class TranscriptSegment(Base, TimestampMixin):
+    """
+    Stores an individual segment of transcribed audio.
+    
+    Includes text, speaker information, semantic embeddings for vector search,
+    and tsvector columns for full-text search.
+    """
     __tablename__ = "transcript_segments"
     __table_args__ = (
         CheckConstraint("end_time >= start_time", name="check_segment_time_validity"),

@@ -1,3 +1,9 @@
+"""
+Shared data contracts and Pydantic models for the ProHuman platform.
+
+This package exports all domain models used for inter-service communication
+and data serialization/deserialization.
+"""
 from __future__ import annotations
 
 from .audio import (

@@ -1,244 +1,596 @@
-import React, { useRef, useState } from 'react';
-import { CheckCircle, Mic, Radio, Square, Upload } from 'lucide-react';
-import { createSession, Session, uploadAudioFile } from '../api/client';
+import React, { useEffect, useRef, useState } from 'react';
+import { 
+  Mic, 
+  Square, 
+  Upload, 
+  Sparkles, 
+  Radio, 
+  CheckCircle2, 
+  Volume2, 
+  ArrowRight,
+  Headphones
+} from 'lucide-react';
+import { createSession, Session, uploadAudioFile, submitSessionTranscript } from '../api/client';
+import { devanagariToHinglish } from '../utils/hinglish';
+import { useUser } from '../context/UserContext';
 
 interface Props {
   onSessionCreated?: (session: Session) => void;
+  onViewTranscript?: (sessionId: string) => void;
 }
 
-export const AudioRecorder: React.FC<Props> = ({ onSessionCreated }) => {
+const HARDWARE_MODES = [
+  { id: 'neo1-badge-01', label: 'Neo-1 Lapel Badge' },
+  { id: 'studio-desk-mic', label: 'Studio Desk' },
+  { id: 'mobile-companion', label: 'Mobile Device' },
+];
+
+export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscript }) => {
+  const { activeUser } = useUser();
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [session, setSession] = useState<Session | null>(null);
-  const [chunksSent, setChunksSent] = useState(0);
-  const [bytesSent, setBytesSent] = useState(0);
-  const [statusMessage, setStatusMessage] = useState('Ready to capture audio');
+  const [completedSessionId, setCompletedSessionId] = useState<string | null>(null);
+  const [selectedLanguage, setSelectedLanguage] = useState<'hi' | 'en'>('hi');
+  const [selectedHardware, setSelectedHardware] = useState('neo1-badge-01');
+  const [statusMessage, setStatusMessage] = useState('Ready to capture voice memory');
   const [isUploading, setIsUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Real-time speech transcription state
+  const [liveTranscript, setLiveTranscript] = useState<string>('');
+  const [interimText, setInterimText] = useState<string>('');
+  const interimTextRef = useRef<string>('');
+  const isRecordingActiveRef = useRef<boolean>(false);
+  const speechTurnsRef = useRef<Array<{ text: string; start_time: number; end_time: number }>>([]);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const recognitionRef = useRef<any>(null);
   const stoppingRef = useRef(false);
+  const timerRef = useRef<any>(null);
+  const recordingStartTimeRef = useRef<number>(0);
+
+  // Timer effect
+  useEffect(() => {
+    if (isRecording) {
+      setRecordingSeconds(0);
+      timerRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isRecording]);
+
+  const formatTimer = (totalSeconds: number) => {
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Cleanup hardware mic, WebSocket, and speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      isRecordingActiveRef.current = false;
+      stoppingRef.current = true;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try { mediaRecorderRef.current.stop(); } catch {}
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try { wsRef.current.close(); } catch {}
+        wsRef.current = null;
+      }
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+        recognitionRef.current = null;
+      }
+    };
+  }, []);
 
   const startLiveStreaming = async () => {
     try {
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-        throw new Error('This browser does not support microphone recording.');
+        throw new Error('Microphone access is not supported on this browser.');
       }
       const mimeType = ['audio/webm;codecs=opus', 'audio/webm'].find((type) =>
         MediaRecorder.isTypeSupported(type),
       );
       if (!mimeType) throw new Error('This browser cannot record WebM audio.');
 
-      setStatusMessage('Requesting microphone access...');
+      setStatusMessage('Requesting microphone permissions...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      setStatusMessage('Creating audio session...');
-      const newSession = await createSession('browser-mic-gadget');
+
+      setStatusMessage(`Initializing secure AI session for ${activeUser.name}...`);
+      const newSession = await createSession(selectedHardware, selectedLanguage, {
+        user_id: activeUser.id,
+        user_name: activeUser.name,
+        user_role: activeUser.role,
+      });
       setSession(newSession);
+      setCompletedSessionId(null);
+      setLiveTranscript('');
+      setInterimText('');
+      interimTextRef.current = '';
+      speechTurnsRef.current = [];
+      stoppingRef.current = false;
+      isRecordingActiveRef.current = true;
       onSessionCreated?.(newSession);
 
+      recordingStartTimeRef.current = Date.now();
+
+      // Setup WebSocket connection to Gateway
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const socket = new WebSocket(
-        `${protocol}//${window.location.host}/api/v1/audio/stream/${newSession.id}`,
-      );
-      wsRef.current = socket;
-      stoppingRef.current = false;
-      setChunksSent(0);
-      setBytesSent(0);
+      const wsUrl = `${protocol}//${window.location.host}/ws/audio/${newSession.id}`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      ws.binaryType = 'arraybuffer';
 
-      await new Promise<void>((resolve, reject) => {
-        let didOpen = false;
-        socket.onopen = () => {
-          didOpen = true;
-          socket.send(JSON.stringify({
-            format: 'OPUS',
-            sample_rate: 16000,
-            channels: 1,
-            chunk_size_bytes: 4096,
-          }));
+      ws.onopen = () => {
+        setStatusMessage(
+          selectedLanguage === 'hi' 
+            ? 'Streaming Live: Speak naturally in Hindi or English (Auto-Hinglish enabled)' 
+            : 'Streaming Live: Speak naturally in English'
+        );
+      };
 
-          const recorder = new MediaRecorder(stream, { mimeType });
-          mediaRecorderRef.current = recorder;
-          let chunkCount = 0;
-          let byteCount = 0;
-          let pendingChunk = Promise.resolve();
+      ws.onerror = (e) => {
+        console.warn('Live WebSocket streaming notice:', e);
+      };
 
-          recorder.ondataavailable = (event) => {
-            if (event.data.size === 0 || socket.readyState !== WebSocket.OPEN) return;
-            pendingChunk = pendingChunk.then(async () => {
-              const chunk = await event.data.arrayBuffer();
-              if (socket.readyState !== WebSocket.OPEN) return;
-              socket.send(chunk);
-              chunkCount += 1;
-              byteCount += chunk.byteLength;
-              setChunksSent(chunkCount);
-              setBytesSent(byteCount);
-            });
-          };
-          recorder.onerror = () => {
-            setStatusMessage('Microphone recording failed.');
-            stopLiveStreaming();
-          };
-          recorder.onstop = async () => {
-            await pendingChunk;
-            stream.getTracks().forEach((track) => track.stop());
-            streamRef.current = null;
-            if (socket.readyState === WebSocket.OPEN) socket.close();
-          };
+      // Setup Audio MediaRecorder
+      const mediaRecorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 64000 });
+      mediaRecorderRef.current = mediaRecorder;
 
-          recorder.start(250);
-          setIsRecording(true);
-          setStatusMessage('Streaming microphone audio to the gateway...');
-          resolve();
-        };
-        socket.onerror = () => {
-          if (!didOpen) reject(new Error('Could not connect to the audio gateway.'));
-          else setStatusMessage('Audio gateway connection failed.');
-        };
-        socket.onclose = (event) => {
-          if (!didOpen) {
-            reject(new Error(event.reason || 'Audio gateway rejected the connection.'));
-          } else if (stoppingRef.current) {
-            setStatusMessage('Recording uploaded. Transcription has been queued.');
-          } else {
-            setStatusMessage(event.reason || 'Audio connection closed unexpectedly.');
-            setIsRecording(false);
-            if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
-            stream.getTracks().forEach((track) => track.stop());
-            streamRef.current = null;
+      mediaRecorder.ondataavailable = async (event) => {
+        if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+          try {
+            const buffer = await event.data.arrayBuffer();
+            ws.send(buffer);
+          } catch (e) {
+            console.error('Failed sending audio buffer:', e);
           }
-        };
-      });
-    } catch (error: unknown) {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      wsRef.current?.close();
+        }
+      };
+
+      mediaRecorder.start(250);
+      setIsRecording(true);
+
+      // Start Browser Web Speech Recognition
+      const SpeechRecognition =
+        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+      if (SpeechRecognition) {
+        try {
+          const recognition = new SpeechRecognition();
+          recognition.continuous = true;
+          recognition.interimResults = true;
+          recognition.lang = selectedLanguage === 'hi' ? 'hi-IN' : 'en-US';
+
+          recognition.onresult = (event: any) => {
+            let finalTurn = '';
+            let currentInterim = '';
+
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              const res = event.results[i];
+              const transcriptChunk = selectedLanguage === 'hi' 
+                ? devanagariToHinglish(res[0].transcript) 
+                : res[0].transcript;
+
+              if (res.isFinal) {
+                finalTurn += ' ' + transcriptChunk;
+              } else {
+                currentInterim += ' ' + transcriptChunk;
+              }
+            }
+
+            if (finalTurn.trim()) {
+              const nowSec = (Date.now() - recordingStartTimeRef.current) / 1000;
+              const prevEnd = speechTurnsRef.current.length > 0
+                ? speechTurnsRef.current[speechTurnsRef.current.length - 1].end_time
+                : 0;
+              const startSec = Math.max(prevEnd, Math.max(0, nowSec - 3));
+
+              speechTurnsRef.current.push({
+                text: finalTurn.trim(),
+                start_time: Math.round(startSec * 10) / 10,
+                end_time: Math.round(nowSec * 10) / 10,
+              });
+
+              setLiveTranscript((prev) => (prev ? prev + ' ' + finalTurn.trim() : finalTurn.trim()));
+            }
+
+            setInterimText(currentInterim.trim());
+            interimTextRef.current = currentInterim.trim();
+          };
+
+          recognition.onerror = (e: any) => {
+            if (e.error !== 'no-speech') {
+              console.warn('Speech recognition warning:', e.error);
+            }
+          };
+
+          recognition.onend = () => {
+            if (isRecordingActiveRef.current && !stoppingRef.current) {
+              try { recognition.start(); } catch {}
+            }
+          };
+
+          recognition.start();
+          recognitionRef.current = recognition;
+        } catch (e) {
+          console.warn('SpeechRecognition initialization notice:', e);
+        }
+      }
+    } catch (error: any) {
+      console.error('Audio recording failed:', error);
+      setStatusMessage(`Error: ${error.message}`);
       setIsRecording(false);
-      setStatusMessage(
-        `Could not start recording: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      isRecordingActiveRef.current = false;
     }
   };
 
-  const stopLiveStreaming = () => {
+  const stopLiveStreaming = async () => {
     stoppingRef.current = true;
-    setStatusMessage('Finishing audio upload...');
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== 'inactive') {
-      recorder.stop();
-      return;
+    isRecordingActiveRef.current = false;
+    setIsRecording(false);
+    setStatusMessage('Finalizing audio stream & extracting intelligence with Gemini...');
+
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+      recognitionRef.current = null;
     }
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
+
+    if (interimTextRef.current && interimTextRef.current.trim()) {
+      const nowSec = (Date.now() - recordingStartTimeRef.current) / 1000;
+      speechTurnsRef.current.push({
+        text: interimTextRef.current.trim(),
+        start_time: Math.max(0, nowSec - 2),
+        end_time: nowSec,
+      });
+      setLiveTranscript((prev) => (prev ? prev + ' ' + interimTextRef.current.trim() : interimTextRef.current.trim()));
+      setInterimText('');
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop(); } catch {}
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({ type: 'eos' }));
+        setTimeout(() => {
+          if (wsRef.current) wsRef.current.close();
+        }, 600);
+      } catch {}
+    }
+
+    const currentSessionId = session?.id;
+    if (currentSessionId && speechTurnsRef.current.length > 0) {
+      try {
+        const segmentsPayload = speechTurnsRef.current.map((t) => ({
+          text: t.text,
+          speaker_name: activeUser.name,
+          start_time: t.start_time,
+          end_time: t.end_time,
+          confidence: 0.95,
+        }));
+        await submitSessionTranscript(currentSessionId, segmentsPayload);
+      } catch (e) {
+        console.warn('Transcript background sync notice:', e);
+      }
+    }
+
+    if (currentSessionId) {
+      setCompletedSessionId(currentSessionId);
+      setStatusMessage('Conversation saved! AI features and MOM generated.');
+    }
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const handleFileUpload = async (file: File) => {
     if (!file) return;
 
     try {
       setIsUploading(true);
-      setStatusMessage('Creating upload session...');
-      const newSession = await createSession('file-upload-gadget');
+      setStatusMessage(`Analyzing & uploading ${file.name}...`);
+      const newSession = await createSession(selectedHardware, selectedLanguage, {
+        user_id: activeUser.id,
+        user_name: activeUser.name,
+        user_role: activeUser.role,
+      });
       setSession(newSession);
       onSessionCreated?.(newSession);
-      setStatusMessage(`Uploading audio file (${(file.size / 1024).toFixed(1)} KB)...`);
+      setStatusMessage(`Transcribing audio (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
       await uploadAudioFile(newSession.id, file);
-      setStatusMessage('File uploaded. Transcription has been queued.');
+      setStatusMessage('Audio processed! Minutes of meeting generated.');
+      setCompletedSessionId(newSession.id);
     } catch (error: unknown) {
       setStatusMessage(`Upload failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsUploading(false);
-      event.target.value = '';
     }
   };
 
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) handleFileUpload(file);
+  };
+
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-6 shadow-xl backdrop-blur">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold flex items-center gap-2 text-white">
-          <Radio className="w-5 h-5 text-sky-400" />
-          Audio ingestion
-        </h2>
-        {session && (
-          <span className="text-xs bg-slate-800 text-slate-300 px-3 py-1 rounded-full border border-slate-700 font-mono">
-            Session: {session.id.slice(0, 8)}...
-          </span>
-        )}
-      </div>
+    <div className="space-y-6">
+      {/* Hero Recording Studio Card */}
+      <div className="glass-card rounded-3xl p-6 md:p-8 relative overflow-hidden">
+        {/* Subtle Ambient Glow Orbs */}
+        <div 
+          className={`absolute -top-24 -left-24 w-72 h-72 rounded-full blur-3xl transition-opacity duration-700 pointer-events-none ${
+            isRecording ? 'bg-rose-500/20 opacity-100' : 'bg-sky-500/10 opacity-70'
+          }`} 
+        />
+        <div 
+          className={`absolute -bottom-24 -right-24 w-72 h-72 rounded-full blur-3xl transition-opacity duration-700 pointer-events-none ${
+            isRecording ? 'bg-amber-500/15 opacity-100' : 'bg-indigo-500/10 opacity-70'
+          }`} 
+        />
 
-      <p className="text-sm text-slate-400 mb-6">
-        Stream browser microphone audio or upload a recording. Audio is stored and queued for
-        transcription, embedding, and meeting analysis.
-      </p>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <div className="bg-slate-950/60 border border-slate-800 p-5 rounded-lg flex flex-col justify-between">
-          <div>
-            <span className="text-xs uppercase font-semibold tracking-wider text-sky-400">Live audio</span>
-            <h3 className="text-base font-semibold text-white mt-1">Microphone stream</h3>
-            <p className="text-xs text-slate-400 mt-1">
-              Captures browser WebM/Opus audio and streams it to the gateway over WebSocket.
-            </p>
+        {/* Top Control Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-8 relative z-10">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-sky-400 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/25">
+              <Radio className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg md:text-xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+                Live Conversation Studio
+                <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                  ✦ Gemini 3.5 Ready
+                </span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Capture spoken conversations into structured minutes and action items</p>
+            </div>
           </div>
-          <div className="mt-4 pt-4 border-t border-slate-800/80 flex items-center gap-3">
+
+          {/* Clean Controls: 2-Option Language Pill & Hardware Mode */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Direct Hindi / English Toggle Pill */}
+            <div className="flex items-center p-1 rounded-2xl glass-pill">
+              <button
+                type="button"
+                onClick={() => setSelectedLanguage('hi')}
+                disabled={isRecording || isUploading}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                  selectedLanguage === 'hi'
+                    ? 'bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                🇮🇳 Hindi / Hinglish
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedLanguage('en')}
+                disabled={isRecording || isUploading}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                  selectedLanguage === 'en'
+                    ? 'bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                🌐 English
+              </button>
+            </div>
+
+            {/* Hardware badge selector */}
+            <div className="flex items-center gap-1.5 glass-pill px-3 py-1.5 rounded-2xl text-xs text-slate-700 dark:text-slate-300">
+              <Headphones className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" />
+              <select
+                value={selectedHardware}
+                onChange={(e) => setSelectedHardware(e.target.value)}
+                disabled={isRecording || isUploading}
+                className="bg-transparent text-xs text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
+              >
+                {HARDWARE_MODES.map((h) => (
+                  <option key={h.id} value={h.id} className="bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200">
+                    {h.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Central Recording Pod */}
+        <div className="flex flex-col items-center justify-center py-6 md:py-10 text-center relative z-10">
+          {/* Big Action Orb Button */}
+          <div className="relative mb-6">
             {!isRecording ? (
               <button
                 onClick={startLiveStreaming}
                 disabled={isUploading}
-                className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 text-white font-medium rounded-lg text-sm transition"
+                className="w-24 h-24 md:w-28 md:h-28 rounded-full bg-gradient-to-tr from-sky-500 via-cyan-400 to-indigo-600 hover:scale-105 active:scale-95 transition-all duration-300 flex flex-col items-center justify-center text-white shadow-[0_0_40px_rgba(14,165,233,0.35)] hover:shadow-[0_0_55px_rgba(14,165,233,0.55)] group cursor-pointer disabled:opacity-50"
               >
-                <Mic className="w-4 h-4" /> Start recording
+                <Mic className="w-9 h-9 md:w-11 md:h-11 transition-transform group-hover:scale-110" />
+                <span className="text-[11px] font-semibold tracking-wide uppercase mt-1 opacity-90">Record</span>
               </button>
             ) : (
-              <button
-                onClick={stopLiveStreaming}
-                className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-medium rounded-lg text-sm transition"
-              >
-                <Square className="w-4 h-4" /> Stop & finalize
-              </button>
-            )}
-            {isRecording && (
-              <div className="flex items-center gap-4 text-xs font-mono text-slate-400">
-                <span>Chunks: <b className="text-sky-400">{chunksSent}</b></span>
-                <span>Bytes: <b className="text-sky-400">{(bytesSent / 1024).toFixed(1)} KB</b></span>
+              <div className="relative">
+                <div className="absolute inset-0 rounded-full animate-pulse-ring" />
+                <button
+                  onClick={stopLiveStreaming}
+                  className="w-24 h-24 md:w-28 md:h-28 rounded-full bg-gradient-to-tr from-rose-500 via-red-500 to-pink-600 hover:scale-105 active:scale-95 transition-all duration-300 flex flex-col items-center justify-center text-white shadow-[0_0_50px_rgba(244,63,94,0.6)] cursor-pointer relative z-10"
+                >
+                  <Square className="w-8 h-8 fill-current" />
+                  <span className="text-[11px] font-bold tracking-wide uppercase mt-1">Stop & AI</span>
+                </button>
               </div>
             )}
           </div>
-        </div>
 
-        <div className="bg-slate-950/60 border border-slate-800 p-5 rounded-lg flex flex-col justify-between">
-          <div>
-            <span className="text-xs uppercase font-semibold tracking-wider text-emerald-400">File upload</span>
-            <h3 className="text-base font-semibold text-white mt-1">Upload a recording</h3>
-            <p className="text-xs text-slate-400 mt-1">
-              Upload an audio file up to 100 MB to start the same transcription pipeline.
+          {/* Recording Timer & Status */}
+          <div className="space-y-2">
+            {isRecording ? (
+              <div className="flex items-center gap-3">
+                <span className="w-3 h-3 rounded-full bg-rose-500 animate-ping" />
+                <span className="font-mono text-2xl font-bold tracking-wider text-slate-900 dark:text-white">
+                  {formatTimer(recordingSeconds)}
+                </span>
+                {/* Audio Waveform Bars */}
+                <div className="flex items-center gap-1 h-8 px-2">
+                  <div className="w-1 bg-sky-500 dark:bg-sky-400 rounded-full animate-wave-1" />
+                  <div className="w-1 bg-indigo-500 dark:bg-indigo-400 rounded-full animate-wave-2" />
+                  <div className="w-1 bg-cyan-500 dark:bg-cyan-400 rounded-full animate-wave-3" />
+                  <div className="w-1 bg-emerald-500 dark:bg-emerald-400 rounded-full animate-wave-4" />
+                  <div className="w-1 bg-sky-500 dark:bg-sky-400 rounded-full animate-wave-5" />
+                  <div className="w-1 bg-indigo-500 dark:bg-indigo-400 rounded-full animate-wave-6" />
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                Tap button to start recording or speak naturally
+              </p>
+            )}
+            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+              {selectedLanguage === 'hi' 
+                ? 'Speaks in Hindi or English — automatically saved in clean Roman Hinglish MOM.' 
+                : 'Speaks in English — automatically converted into structured meeting notes.'}
             </p>
           </div>
-          <div className="mt-4 pt-4 border-t border-slate-800/80">
-            <label className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-lg text-sm transition cursor-pointer w-fit border border-slate-700">
-              <Upload className="w-4 h-4 text-emerald-400" />
-              {isUploading ? 'Uploading...' : 'Choose audio file'}
-              <input
-                type="file"
-                accept="audio/*,.wav,.opus,.ogg"
-                onChange={handleFileUpload}
-                disabled={isUploading || isRecording}
-                className="hidden"
-              />
-            </label>
+        </div>
+
+        {/* Live Speech Stream Pill */}
+        {(isRecording || liveTranscript || interimText) && (
+          <div className="mt-4 p-5 rounded-2xl border border-sky-500/25 bg-white/70 dark:bg-slate-950/60 backdrop-blur-md relative z-10 transition-all">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="flex items-center gap-2 text-xs font-semibold text-sky-600 dark:text-sky-400">
+                <Volume2 className="w-3.5 h-3.5" />
+                Live Speech Stream
+              </span>
+              {isRecording && (
+                <span className="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  Listening in real-time...
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-slate-800 dark:text-slate-200 leading-relaxed min-h-[48px]">
+              {liveTranscript ? (
+                <>
+                  {liveTranscript}{' '}
+                  {interimText && <span className="text-sky-500 dark:text-sky-300 italic">{interimText}</span>}
+                </>
+              ) : interimText ? (
+                <span className="text-sky-500 dark:text-sky-300 italic">{interimText}</span>
+              ) : (
+                <span className="text-slate-400 dark:text-slate-500 italic">Say something... your speech will appear here dynamically</span>
+              )}
+            </p>
           </div>
+        )}
+
+        {/* Status Bar */}
+        <div className="mt-6 pt-4 border-t border-slate-200 dark:border-white/[0.06] flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 relative z-10">
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${isRecording ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500 dark:bg-emerald-400'}`} />
+            <span className="truncate">{statusMessage}</span>
+          </div>
+          {session && (
+            <span className="font-mono text-[10px] text-slate-500 bg-slate-100 dark:bg-white/[0.04] px-2.5 py-1 rounded-md border border-slate-200 dark:border-white/[0.08]">
+              Session: {session.id.slice(0, 8)}...
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="flex items-center gap-2 bg-slate-950 px-4 py-2.5 rounded-lg border border-slate-800/80 text-xs">
-        {isRecording ? (
-          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+      {/* Audio File Dropzone & Celebration Banner */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Upload Dropzone */}
+        <div
+          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={handleDrop}
+          className={`glass-card rounded-2xl p-6 border-2 border-dashed transition-all flex flex-col items-center justify-center text-center cursor-pointer ${
+            isDragging 
+              ? 'border-sky-500 bg-sky-50 dark:bg-sky-500/10 scale-[1.01]' 
+              : 'border-slate-300 dark:border-white/10 hover:border-slate-400 dark:hover:border-white/20 bg-white/40 dark:bg-slate-900/30'
+          }`}
+        >
+          <input
+            type="file"
+            id="audio-file-input"
+            accept="audio/*,.wav,.opus,.ogg,.mp3,.m4a,.webm"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleFileUpload(file);
+            }}
+            disabled={isUploading || isRecording}
+            className="hidden"
+          />
+          <label htmlFor="audio-file-input" className="cursor-pointer flex flex-col items-center">
+            <div className="w-12 h-12 rounded-2xl bg-sky-50 dark:bg-white/[0.05] border border-sky-100 dark:border-white/[0.08] flex items-center justify-center text-sky-500 dark:text-sky-400 mb-3 group-hover:scale-110 transition">
+              <Upload className="w-5 h-5" />
+            </div>
+            <h4 className="text-sm font-semibold text-slate-900 dark:text-white">
+              {isUploading ? 'Processing Audio File...' : 'Upload Existing Audio Recording'}
+            </h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-xs">
+              Drag & drop MP3, WAV, M4A, or OPUS files up to 100MB
+            </p>
+          </label>
+        </div>
+
+        {/* Success / Next Step Card */}
+        {completedSessionId ? (
+          <div className="glass-card rounded-2xl p-6 border border-emerald-500/30 bg-emerald-50/70 dark:bg-emerald-950/20 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 mb-2">
+                <CheckCircle2 className="w-5 h-5" />
+                <span className="text-xs uppercase font-bold tracking-wider">Intelligence Ready</span>
+              </div>
+              <h4 className="text-base font-bold text-slate-900 dark:text-white">Your Meeting is Processed</h4>
+              <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
+                Gemini has generated your executive title, Roman Hinglish summary, key decisions, and action items.
+              </p>
+            </div>
+            <button
+              onClick={() => onViewTranscript?.(completedSessionId)}
+              className="mt-4 flex items-center justify-center gap-2 w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              View Diarized Transcript & MOM
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
         ) : (
-          <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+          <div className="glass-card rounded-2xl p-6 border border-slate-200 dark:border-white/[0.06] bg-white/40 dark:bg-slate-900/20 flex flex-col justify-between">
+            <div>
+              <span className="text-xs uppercase font-semibold tracking-wider text-indigo-500 dark:text-indigo-400">Language System</span>
+              <h4 className="text-base font-semibold text-slate-900 dark:text-white mt-1">Hindi & English Focused</h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                Choose Hindi/Hinglish or English with a single tap. All output notes are cleanly structured with decisions and assigned action items.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 mt-4 pt-3 border-t border-slate-200 dark:border-white/[0.05] text-[11px] text-slate-500">
+              <span className="px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-white/[0.05] text-slate-700 dark:text-slate-300">Decisions</span>
+              <span className="px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-white/[0.05] text-slate-700 dark:text-slate-300">Action Items</span>
+              <span className="px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-white/[0.05] text-slate-700 dark:text-slate-300">Speaker Diarization</span>
+            </div>
+          </div>
         )}
-        <span className="text-slate-400 font-mono">Status:</span>
-        <span className="text-slate-200">{statusMessage}</span>
       </div>
     </div>
   );

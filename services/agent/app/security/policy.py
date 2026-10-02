@@ -1,15 +1,20 @@
+"""Module for policy.py."""
 from ..runtime.engine import ToolCall, AgentState, ToolDefinition, AgentConfig
 from .sanitizer import InputSanitizer
 
 class PolicyViolation(Exception):
+    """Class documentation."""
     pass
 
 class PolicyEngine:
+    """Class documentation."""
     def __init__(self, config: AgentConfig, webhook_allowlist: set[str]):
+        """Method documentation."""
         self.config = config
         self.webhook_allowlist = webhook_allowlist
 
     def check(self, tool_call: ToolCall, state: AgentState, tool_def: ToolDefinition):
+        """Method documentation."""
         if state.total_hops >= self.config.max_total_hops:
             raise PolicyViolation("Hop cap exceeded")
         if state.tokens_used >= self.config.token_budget_limit:

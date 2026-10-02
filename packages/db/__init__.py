@@ -1,3 +1,8 @@
+"""
+Database package providing models, repositories, and engine configuration.
+
+Exports core base classes, engine setup, and all SQLAlchemy models.
+"""
 from __future__ import annotations
 
 from .base import Base, TimestampMixin, uuid_pk

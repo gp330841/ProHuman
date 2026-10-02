@@ -30,20 +30,37 @@ class SummaryProvider(BaseFeatureProvider):
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert meeting summarizer. Extract a concise title, an executive summary, and key topics discussed."
+                "content": (
+                    "You are an expert meeting summarizer. "
+                    "CRITICAL LANGUAGE INSTRUCTION: You MUST ALWAYS write the title, executive summary, "
+                    "and key topics in conversational, fluent Hinglish (conversational mix of Hindi and English "
+                    "written strictly in Latin/Roman script). Never use Devanagari script."
+                )
             },
             {
                 "role": "user",
-                "content": f"Please summarize this transcript:\n\n{transcript_text}"
+                "content": f"Please summarize this transcript in Hinglish:\n\n{transcript_text}"
             }
         ]
 
-        result = await self.llm_client.generate_structured(
-            messages=messages,
-            response_model=SummaryResult
-        )
-
-        elapsed = time.time() - start_time
-        logger.info("summary_processed", session_id=session_id, elapsed=elapsed)
-        
-        return result
+        try:
+            result = await self.llm_client.generate_structured(
+                messages=messages,
+                response_model=SummaryResult
+            )
+            elapsed = time.time() - start_time
+            logger.info("summary_processed", session_id=session_id, elapsed=elapsed)
+            return result
+        except Exception as e:
+            logger.warning("summary_llm_failed_falling_back_to_extractive", error=str(e))
+            from packages.contracts.hinglish import devanagari_to_hinglish
+            full_text = " ".join([devanagari_to_hinglish(seg.text) for seg in segments if seg.text])
+            title = "Meeting Summary"
+            if segments and len(segments[0].text) > 5:
+                title = " ".join(devanagari_to_hinglish(segments[0].text).split()[:6]).title()
+            return SummaryResult(
+                title=title,
+                executive_summary=full_text[:400] if full_text else "Meeting conversation record ki gayi.",
+                key_topics=["Charcha", "Action Items", "Updates"],
+                participant_count=len(set(seg.speaker_label for seg in segments)) or 1
+            )

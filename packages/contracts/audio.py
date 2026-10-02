@@ -1,14 +1,22 @@
+"""
+Audio-related data contracts.
+
+Defines schemas and constants for audio formats, metadata, and configuration
+used throughout the audio processing pipeline.
+"""
 from __future__ import annotations
 
 from enum import Enum
 from pydantic import BaseModel
 
 class AudioFormat(str, Enum):
+    """Supported audio formats for recording and processing."""
     OPUS = "OPUS"
     WAV = "WAV"
     PCM16 = "PCM16"
 
 class AudioChunkMeta(BaseModel):
+    """Metadata for a single chunk of audio data."""
     chunk_index: int
     size_bytes: int
     checksum: str
@@ -16,6 +24,7 @@ class AudioChunkMeta(BaseModel):
     s3_key: str
 
 class AudioSessionConfig(BaseModel):
+    """Configuration for an audio recording session."""
     sample_rate: int = 16000
     channels: int = 1
     format: AudioFormat

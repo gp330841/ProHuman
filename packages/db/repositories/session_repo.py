@@ -1,3 +1,6 @@
+"""
+Repository for managing recording sessions.
+"""
 from __future__ import annotations
 
 from typing import Sequence
@@ -9,10 +12,15 @@ from .base import BaseRepository
 from ..models.session import Session, SessionStatusEnum
 
 class SessionRepository(BaseRepository[Session]):
+    """Repository for querying and updating audio recording sessions."""
     def __init__(self, session: AsyncSession):
         super().__init__(session, Session)
 
     async def get_with_details(self, session_id: UUID) -> Session | None:
+        """
+        Get a session by ID and eagerly load all its relationships
+        (audio chunks, transcript segments, feature results).
+        """
         stmt = select(Session).options(
             selectinload(Session.audio_chunks),
             selectinload(Session.transcript_segments),
@@ -22,8 +30,19 @@ class SessionRepository(BaseRepository[Session]):
         return result.scalar_one_or_none()
 
     async def list_sessions(
-        self, limit: int = 20, offset: int = 0, status_filter: SessionStatusEnum | None = None, device_id_filter: str | None = None
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        status_filter: SessionStatusEnum | None = None,
+        device_id_filter: str | None = None,
+        user_id_filter: str | None = None,
     ) -> tuple[list[Session], int]:
+        """
+        List sessions with optional filtering and pagination.
+        
+        Returns:
+            A tuple of (sessions_list, total_count).
+        """
         stmt = select(Session)
         count_stmt = select(func.count()).select_from(Session)
 
@@ -33,6 +52,9 @@ class SessionRepository(BaseRepository[Session]):
         if device_id_filter:
             stmt = stmt.filter(Session.device_id == device_id_filter)
             count_stmt = count_stmt.filter(Session.device_id == device_id_filter)
+        if user_id_filter:
+            stmt = stmt.filter(Session.metadata_["user_id"].astext == user_id_filter)
+            count_stmt = count_stmt.filter(Session.metadata_["user_id"].astext == user_id_filter)
 
         stmt = stmt.limit(limit).offset(offset).order_by(Session.created_at.desc())
 
@@ -45,4 +67,7 @@ class SessionRepository(BaseRepository[Session]):
         return sessions, total_count
 
     async def update_status(self, session_id: UUID, status: SessionStatusEnum) -> Session | None:
+        """
+        Update the status of a specific session.
+        """
         return await self.update(session_id, status=status)

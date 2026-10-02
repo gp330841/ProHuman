@@ -20,12 +20,14 @@ from pydantic import BaseModel, Field, field_validator
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class SearchMode(str, enum.Enum):
+    """Class documentation."""
     HYBRID = "hybrid"       # RRF over vector + full-text
     SEMANTIC = "semantic"   # pgvector cosine only
     LEXICAL = "lexical"     # tsvector BM25 only
 
 
 class ActionItemStatus(str, enum.Enum):
+    """Class documentation."""
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -33,6 +35,7 @@ class ActionItemStatus(str, enum.Enum):
 
 
 class ActionItemPriority(str, enum.Enum):
+    """Class documentation."""
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
@@ -40,6 +43,7 @@ class ActionItemPriority(str, enum.Enum):
 
 
 class ExternalTarget(str, enum.Enum):
+    """Class documentation."""
     SLACK = "slack"
     NOTION = "notion"
     LINEAR = "linear"
@@ -47,6 +51,7 @@ class ExternalTarget(str, enum.Enum):
 
 
 class ApprovalStatus(str, enum.Enum):
+    """Class documentation."""
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -119,6 +124,7 @@ class SearchConversationsInput(BaseModel):
     @field_validator("time_range_end")
     @classmethod
     def validate_time_range(cls, v: datetime | None, info) -> datetime | None:
+        """Method documentation."""
         start = info.data.get("time_range_start")
         if v and start and v <= start:
             raise ValueError("time_range_end must be after time_range_start")
@@ -126,6 +132,7 @@ class SearchConversationsInput(BaseModel):
 
 
 class SearchResultSegment(BaseModel):
+    """Class documentation."""
     segment_id: UUID
     session_id: UUID
     session_title: str | None = None
@@ -141,6 +148,7 @@ class SearchResultSegment(BaseModel):
 
 
 class SearchConversationsOutput(BaseModel):
+    """Class documentation."""
     results: list[SearchResultSegment]
     total_count: int
     query_embedding_model: str = Field(default="text-embedding-3-small", description="Embedding model used for semantic component")
@@ -152,6 +160,7 @@ class SearchConversationsOutput(BaseModel):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class ContextWindowMode(str, enum.Enum):
+    """Class documentation."""
     TIMESTAMP = "timestamp"       # Window around a specific time
     SEGMENT = "segment"           # Window around a specific segment
     SPEAKER_TURNS = "speaker_turns"  # N turns before/after
@@ -208,6 +217,7 @@ class FetchConversationContextInput(BaseModel):
     @field_validator("anchor_timestamp")
     @classmethod
     def require_timestamp_for_mode(cls, v, info):
+        """Method documentation."""
         if info.data.get("mode") == ContextWindowMode.TIMESTAMP and v is None:
             raise ValueError("anchor_timestamp is required when mode='timestamp'")
         return v
@@ -215,12 +225,14 @@ class FetchConversationContextInput(BaseModel):
     @field_validator("anchor_segment_id")
     @classmethod
     def require_segment_for_mode(cls, v, info):
+        """Method documentation."""
         if info.data.get("mode") == ContextWindowMode.SEGMENT and v is None:
             raise ValueError("anchor_segment_id is required when mode='segment'")
         return v
 
 
 class ContextSegment(BaseModel):
+    """Class documentation."""
     segment_id: UUID
     segment_index: int
     speaker_label: str
@@ -233,6 +245,7 @@ class ContextSegment(BaseModel):
 
 
 class FetchConversationContextOutput(BaseModel):
+    """Class documentation."""
     session_id: UUID
     session_title: str | None = None
     session_date: datetime | None = None
@@ -294,6 +307,7 @@ class GenerateMOMInput(BaseModel):
 
 
 class ExtractedDecision(BaseModel):
+    """Class documentation."""
     description: str = Field(description="What was decided")
     made_by: str | None = Field(default=None, description="Speaker who stated the decision")
     context_quote: str | None = Field(default=None, description="Direct quote from transcript supporting this")
@@ -302,6 +316,7 @@ class ExtractedDecision(BaseModel):
 
 
 class ExtractedActionItem(BaseModel):
+    """Class documentation."""
     description: str = Field(description="Actionable task description")
     assignee: str | None = Field(default=None, description="Person responsible (speaker name or label)")
     deadline: date | None = Field(default=None, description="Extracted or inferred deadline")
@@ -312,6 +327,7 @@ class ExtractedActionItem(BaseModel):
 
 
 class ExtractedFollowUp(BaseModel):
+    """Class documentation."""
     description: str
     responsible_party: str | None = None
     due_context: str | None = Field(default=None, description="E.g., 'by next standup', 'before Friday'")
@@ -322,6 +338,7 @@ class ExtractedFollowUp(BaseModel):
 
 
 class AgendaItem(BaseModel):
+    """Class documentation."""
     topic: str
     summary: str
     duration_seconds: float | None = None
@@ -329,6 +346,7 @@ class AgendaItem(BaseModel):
 
 
 class GenerateMOMOutput(BaseModel):
+    """Class documentation."""
     session_id: UUID
     version: int = 1
     title: str = Field(description="Auto-generated meeting title")
@@ -397,6 +415,7 @@ class QueryActionItemsInput(BaseModel):
 
 
 class ActionItemResult(BaseModel):
+    """Class documentation."""
     action_item_id: UUID
     session_id: UUID
     session_title: str | None = None
@@ -413,6 +432,7 @@ class ActionItemResult(BaseModel):
 
 
 class QueryActionItemsOutput(BaseModel):
+    """Class documentation."""
     action_items: list[ActionItemResult]
     total_count: int
     filters_applied: dict[str, Any] = Field(default_factory=dict)
@@ -423,6 +443,7 @@ class QueryActionItemsOutput(BaseModel):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class SlackConfig(BaseModel):
+    """Class documentation."""
     channel_id: str = Field(description="Slack channel ID (e.g., C01234ABCDE)")
     thread_ts: str | None = Field(
         default=None,
@@ -435,6 +456,7 @@ class SlackConfig(BaseModel):
 
 
 class NotionConfig(BaseModel):
+    """Class documentation."""
     database_id: str = Field(description="Notion database ID to insert into")
     page_parent_id: str | None = Field(
         default=None,
@@ -443,6 +465,7 @@ class NotionConfig(BaseModel):
 
 
 class WebhookConfig(BaseModel):
+    """Class documentation."""
     url: str = Field(description="Webhook endpoint URL (must be pre-registered)")
     headers: dict[str, str] | None = Field(
         default=None,
@@ -505,6 +528,7 @@ class TriggerExternalActionInput(BaseModel):
     @field_validator("slack_config")
     @classmethod
     def require_slack_config(cls, v, info):
+        """Method documentation."""
         if info.data.get("target") == ExternalTarget.SLACK and v is None:
             raise ValueError("slack_config is required when target='slack'")
         return v
@@ -512,6 +536,7 @@ class TriggerExternalActionInput(BaseModel):
     @field_validator("notion_config")
     @classmethod
     def require_notion_config(cls, v, info):
+        """Method documentation."""
         if info.data.get("target") == ExternalTarget.NOTION and v is None:
             raise ValueError("notion_config is required when target='notion'")
         return v
@@ -519,12 +544,14 @@ class TriggerExternalActionInput(BaseModel):
     @field_validator("webhook_config")
     @classmethod
     def require_webhook_config(cls, v, info):
+        """Method documentation."""
         if info.data.get("target") == ExternalTarget.WEBHOOK and v is None:
             raise ValueError("webhook_config is required when target='webhook'")
         return v
 
 
 class TriggerExternalActionOutput(BaseModel):
+    """Class documentation."""
     action_id: UUID = Field(description="Unique ID for tracking this external action")
     approval_status: ApprovalStatus
     target: ExternalTarget

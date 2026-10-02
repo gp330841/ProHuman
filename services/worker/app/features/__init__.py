@@ -1,1 +1,2 @@
+"""Worker features package."""
 # Empty

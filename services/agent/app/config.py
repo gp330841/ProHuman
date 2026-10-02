@@ -1,8 +1,13 @@
-from pydantic_settings import BaseSettings
+"""Agent configuration module."""
+from __future__ import annotations
+
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class AgentSettings(BaseSettings):
-    database_url: str
-    redis_url: str
+    """Configuration settings for the agent service."""
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman"
+    redis_url: str = "redis://localhost:6379/0"
     default_llm_model: str = 'gpt-4o'
     embedding_model: str = 'text-embedding-3-small'
     max_total_hops: int = 15
@@ -15,6 +20,12 @@ class AgentSettings(BaseSettings):
     webhook_allowlist: list[str] = []
     log_level: str = 'INFO'
 
-    model_config = {'env_prefix': 'AGENT_'}
+    model_config = SettingsConfigDict(env_prefix='AGENT_', env_file=".env")
 
-settings = AgentSettings()
+
+@lru_cache()
+def get_settings() -> AgentSettings:
+    """Get cached agent settings instance."""
+    return AgentSettings()
+
+settings = get_settings()

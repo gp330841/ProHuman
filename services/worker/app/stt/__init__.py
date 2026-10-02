@@ -1,1 +1,2 @@
+"""Worker STT package."""
 # Empty

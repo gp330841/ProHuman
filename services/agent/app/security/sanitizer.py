@@ -1,9 +1,12 @@
+"""Module for sanitizer.py."""
 import re
 from typing import Any
 
 class InputSanitizer:
+    """Class documentation."""
     @classmethod
     def sanitize(cls, value: Any, field_name: str) -> Any:
+        """Method documentation."""
         if isinstance(value, str):
             cls._check_patterns(value, field_name)
             return value.replace('\0', '')
@@ -15,6 +18,7 @@ class InputSanitizer:
 
     @classmethod
     def _check_patterns(cls, text: str, field_name: str):
+        """Method documentation."""
         text_upper = text.upper()
         sql_patterns = ['DROP ', 'ALTER ', 'DELETE ', 'UNION SELECT ', '1=1', 'SLEEP(', 'BENCHMARK(']
         for p in sql_patterns:

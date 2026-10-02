@@ -1,3 +1,9 @@
+"""
+Database repositories.
+
+Provides data access objects (repositories) for wrapping database queries
+and abstracting SQLAlchemy complexities away from business logic.
+"""
 from __future__ import annotations
 
 from .base import BaseRepository

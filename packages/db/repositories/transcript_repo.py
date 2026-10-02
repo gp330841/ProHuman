@@ -1,3 +1,6 @@
+"""
+Repository for managing transcript segments.
+"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,10 +11,18 @@ from .base import BaseRepository
 from ..models.transcript import TranscriptSegment
 
 class TranscriptRepository(BaseRepository[TranscriptSegment]):
+    """Repository for querying and managing transcript segments, including vector search."""
     def __init__(self, session: AsyncSession):
         super().__init__(session, TranscriptSegment)
 
     async def get_by_session(self, session_id: UUID, order_by_index: bool = True) -> list[TranscriptSegment]:
+        """
+        Get all transcript segments for a session.
+        
+        Args:
+            session_id: The session UUID.
+            order_by_index: Whether to order by segment index.
+        """
         stmt = select(TranscriptSegment).filter_by(session_id=session_id)
         if order_by_index:
             stmt = stmt.order_by(TranscriptSegment.segment_index)
@@ -19,6 +30,12 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
         return list(result.scalars().all())
 
     async def bulk_create(self, segments: list[dict]) -> list[TranscriptSegment]:
+        """
+        Create multiple transcript segments in one operation.
+        
+        Args:
+            segments: List of dictionaries containing segment data.
+        """
         instances = [TranscriptSegment(**segment) for segment in segments]
         self.session.add_all(instances)
         await self.session.flush()
@@ -36,6 +53,10 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
         search_mode: str = "HYBRID",
         rrf_k: int = 60
     ) -> list[dict]:
+        """
+        Perform a hybrid semantic and lexical search over transcript segments.
+        Uses Reciprocal Rank Fusion (RRF) to combine scores.
+        """
         # Implementation of full RRF SQL query
         raw_sql = """
         WITH vector_search AS (
@@ -105,4 +126,7 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
         return [dict(row) for row in rows]
 
     async def update_embeddings(self, segment_id: UUID, embedding: list[float]) -> None:
+        """
+        Update the vector embedding for a given transcript segment.
+        """
         await self.update(segment_id, embedding=embedding)

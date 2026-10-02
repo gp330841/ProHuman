@@ -18,6 +18,7 @@ dependencies = [
     "celery[redis]>=5.4",
     "aiobotocore>=2.9",
     "python-multipart",
+    "pgvector>=0.3",
     "structlog",
 ]
 

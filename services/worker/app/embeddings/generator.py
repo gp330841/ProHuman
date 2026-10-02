@@ -1,3 +1,4 @@
+"""Module for generator.py."""
 from __future__ import annotations
 
 import structlog
@@ -9,11 +10,14 @@ from app.llm.client import LLMClient
 logger = structlog.get_logger(__name__)
 
 class EmbeddingGenerator:
+    """Class documentation."""
     def __init__(self, llm_client: LLMClient, batch_size: int = 32):
+        """Method documentation."""
         self.llm_client = llm_client
         self.batch_size = batch_size
 
     async def generate_for_session(self, session_id: str) -> int:
+        """Method documentation."""
         async with get_db_context() as db_session:
             repo = TranscriptRepository(db_session)
             

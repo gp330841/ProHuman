@@ -39,7 +39,7 @@ services:
       - prohuman-net
 
   minio:
-    image: minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest
     container_name: prohuman-minio
     restart: unless-stopped
     ports:
@@ -52,7 +52,7 @@ services:
     volumes:
       - minio_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      test: ["CMD", "/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -83,7 +83,14 @@ services:
       GATEWAY_LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PYTHONPATH: /app
     volumes:
+      - ../services/gateway/app:/app/app:ro
       - ../packages:/app/packages:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/system/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
@@ -116,6 +123,7 @@ services:
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
       PYTHONPATH: /app
     volumes:
+      - ../services/worker/app:/app/app:ro
       - ../packages:/app/packages:ro
     depends_on:
       postgres:
@@ -149,6 +157,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       PYTHONPATH: /app
     volumes:
+      - ../services/worker/app:/app/app:ro
       - ../packages:/app/packages:ro
     depends_on:
       postgres:
@@ -178,8 +187,12 @@ services:
       WORKER_S3_BUCKET_NAME: ${S3_BUCKET_NAME:-audio-recordings}
       WORKER_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      WORKER_GEMINI_API_KEY: ${WORKER_GEMINI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       PYTHONPATH: /app
     volumes:
+      - ../services/worker/app:/app/app:ro
       - ../packages:/app/packages:ro
     depends_on:
       postgres:
@@ -201,11 +214,21 @@ services:
       REDIS_URL: redis://redis:6379/0
       AGENT_REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      AGENT_DEFAULT_LLM_MODEL: ${AGENT_DEFAULT_LLM_MODEL:-gpt-4o}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AGENT_GEMINI_API_KEY: ${AGENT_GEMINI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      AGENT_DEFAULT_LLM_MODEL: ${AGENT_DEFAULT_LLM_MODEL:-gemini-3.5-flash-lite}
       AGENT_LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PYTHONPATH: /app
     volumes:
+      - ../services/agent/app:/app/app:ro
       - ../packages:/app/packages:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
@@ -223,6 +246,12 @@ services:
     depends_on:
       - gateway
       - agent
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - prohuman-net
 

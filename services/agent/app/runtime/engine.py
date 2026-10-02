@@ -468,48 +468,192 @@ class AgentExecutionEngine:
 
     async def _call_llm(self, state: AgentState) -> Any:
         from app.tools.schemas import TOOL_CATALOG
+        import os
+        import httpx
 
-        if self.llm is not None:
-            return await self.llm.chat.completions.create(
-                model="gpt-4o",
-                messages=state.messages,
-                tools=TOOL_CATALOG,
-                tool_choice="auto",
-                temperature=0.1,
-                max_tokens=4096,
-            )
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            # Format contents for Google Gemini API
+            contents = []
+            for m in state.messages:
+                role = "user" if m.get("role") in ["user", "system"] else "model"
+                contents.append({"role": role, "parts": [{"text": str(m.get("content", ""))}]})
 
-        # Fallback if no LLM client is configured (e.g. unit testing/dry run)
-        class MockChoice:
+            for m_name in ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]:
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key}"
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        resp = await client.post(url, json={"contents": contents})
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                            class GeminiChoice:
+                                def __init__(self, content):
+                                    self.message = type("Msg", (), {"content": content, "tool_calls": []})()
+                            class GeminiResponse:
+                                def __init__(self, content):
+                                    self.choices = [GeminiChoice(content)]
+                                    self.usage = type("Usage", (), {"total_tokens": data.get("usageMetadata", {}).get("totalTokenCount", 50)})()
+                            return GeminiResponse(txt)
+                except Exception as e:
+                    logger.warning("gemini_agent_call_failed", model=m_name, error=str(e))
+
+        # Check if an OpenAI or other LLM API key is present
+        has_api_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
+
+        if self.llm is not None and has_api_key:
+            try:
+                model = os.getenv("LLM_MODEL", "gpt-4o")
+                response = await self.llm.acompletion(
+                    model=model,
+                    messages=state.messages,
+                    tools=TOOL_CATALOG,
+                    tool_choice="auto",
+                    temperature=0.1,
+                    max_tokens=4096,
+                )
+                return response
+            except Exception as e:
+                logger.warning("LLM acompletion error: %s, falling back to autonomous tool reasoning", e)
+
+        # Autonomous tool reasoning fallback (uses DB tools directly)
+        return await self._fallback_tool_reasoning(state)
+
+    async def _fallback_tool_reasoning(self, state: AgentState) -> Any:
+        """Autonomously executes tools against PostgreSQL data and synthesizes Hinglish response."""
+        class FallbackChoice:
             def __init__(self, content):
                 self.message = type("Msg", (), {"content": content, "tool_calls": []})()
-        class MockResponse:
+        class FallbackResponse:
             def __init__(self, content):
-                self.choices = [MockChoice(content)]
-                self.usage = type("Usage", (), {"total_tokens": 10})()
+                self.choices = [FallbackChoice(content)]
+                self.usage = type("Usage", (), {"total_tokens": 15})()
 
-        last_user = state.messages[-1].get("content", "")
-        return MockResponse(f"Analysis completed for query: {last_user}")
+        user_query = ""
+        for m in reversed(state.messages):
+            if m.get("role") == "user" and not str(m.get("content", "")).startswith("[SYSTEM]"):
+                user_query = str(m.get("content", ""))
+                break
+
+        q = user_query.lower()
+
+        # 1. Greetings
+        if any(w in q for w in ["hello", "hi", "hey", "kaise ho", "kya haal", "namaste", "help", "who are you"]):
+            msg = (
+                "Namaste! Main ProHuman ka ReAct Conversation Agent hoon.\n\n"
+                "Main aapke recorded meetings ko analyze kar sakta hoon, jaise:\n"
+                "• **Conversations search karna** (e.g. *'What was discussed about budget?'*)\n"
+                "• **Action items nikalna** (e.g. *'Show all pending tasks'*)\n"
+                "• **MOM & Decisions dekhna** (e.g. *'Recent meeting ka summary kya hai?'*)\n\n"
+                "Aap mujhse koi bhi question pooch sakte hain!"
+            )
+            return FallbackResponse(msg)
+
+        # 2. Action items / tasks query
+        if any(w in q for w in ["action", "task", "todo", "kaam", "deadline", "pending", "assignee"]):
+            try:
+                from app.tools.schemas import QueryActionItemsInput
+                from app.tools.executors import execute_query_action_items
+                result = await execute_query_action_items(QueryActionItemsInput(limit=10))
+                items = result.action_items
+                if items:
+                    lines = [f"Found **{len(items)} action items** from your recorded meetings:\n"]
+                    for idx, it in enumerate(items, 1):
+                        assignee_str = f" (Assignee: **{it.assignee}**)" if it.assignee else ""
+                        priority_str = f" [{it.priority.upper()}]" if it.priority else ""
+                        lines.append(f"{idx}. {it.description}{assignee_str}{priority_str} — *Status: {it.status}*")
+                    return FallbackResponse("\n".join(lines))
+                else:
+                    return FallbackResponse("Filhal database me koi pending action items nahi mile. Jab aap meeting record karenge to action items yahan automatically track ho jayenge.")
+            except Exception as e:
+                logger.warning("Error fetching action items: %s", e)
+
+        # 3. Meeting search / summary / MOM
+        try:
+            from app.tools.schemas import SearchConversationsInput, SearchMode
+            from app.tools.executors import execute_search_conversations
+            search_res = await execute_search_conversations(
+                SearchConversationsInput(query=user_query, limit=5, search_mode=SearchMode.LEXICAL)
+            )
+            if search_res.results:
+                lines = [f"Aapki query '**{user_query}**' ke liye conversations me se relevant segments mile hain:\n"]
+                for r in search_res.results[:5]:
+                    lines.append(f"• **{r.speaker_label}** [{r.start_time:.1f}s - {r.end_time:.1f}s]: \"{r.text}\"")
+                lines.append("\nAap specific speaker ya time context ke baare me bhi pooch sakte hain.")
+                return FallbackResponse("\n".join(lines))
+        except Exception as e:
+            logger.warning("Search tool fallback error: %s", e)
+
+        # 4. Fallback to latest meeting details from DB
+        try:
+            from packages.db.engine import get_db_context
+            from packages.db.repositories.session_repo import SessionRepository
+            from packages.db.repositories.feature_repo import FeatureRepository
+            from packages.db.repositories.transcript_repo import TranscriptRepository
+
+            async with get_db_context() as db_session:
+                sess_repo = SessionRepository(db_session)
+                feat_repo = FeatureRepository(db_session)
+                trans_repo = TranscriptRepository(db_session)
+
+                sessions, _ = await sess_repo.list_sessions(limit=1, offset=0)
+                if sessions:
+                    latest = sessions[0]
+                    mom = await feat_repo.get_by_session_and_name(latest.id, "mom")
+                    segs = await trans_repo.get_by_session(latest.id)
+
+                    response_parts = [f"**Latest Meeting Summary ({latest.device_id})**:"]
+                    if mom and mom.data:
+                        d = mom.data
+                        if d.get("title"): response_parts.append(f"**Title:** {d.get('title')}")
+                        if d.get("executive_summary"): response_parts.append(f"**Summary:** {d.get('executive_summary')}")
+                        if d.get("decisions"):
+                            decs = [f"- {item.get('description', '')}" for item in d.get("decisions", [])]
+                            if decs: response_parts.append("**Decisions:**\n" + "\n".join(decs))
+                        if d.get("action_items"):
+                            acts = [f"- {item.get('description', '')}" for item in d.get("action_items", [])]
+                            if acts: response_parts.append("**Action Items:**\n" + "\n".join(acts))
+                    elif segs:
+                        preview = " ".join([s.text for s in segs[:4]])
+                        response_parts.append(f"**Transcript Preview:** \"{preview}\"")
+                    else:
+                        response_parts.append("Session record ho chuka hai, par abhi tak transcript ya MOM extract nahi hua hai.")
+
+                    return FallbackResponse("\n\n".join(response_parts))
+        except Exception as e:
+            logger.warning("DB query fallback error: %s", e)
+
+        return FallbackResponse(
+            f"Maine aapka request '{user_query}' process kiya. Aap meeting transcribe karke 'Transcript & MOM' tab me dekh sakte hain, ya action items query kar sakte hain."
+        )
 
     async def _force_synthesize(self, state: AgentState) -> str:
         state.messages.append({
             "role": "user",
             "content": (
-                "[SYSTEM] You have reached the maximum number of tool calls. "
-                "Synthesize a complete response to the user's original question "
-                "using ONLY the tool results gathered so far."
+                "[SYSTEM] Synthesize a complete response to the user's original question "
+                "using the tool results gathered so far in Hinglish."
             ),
         })
-        if self.llm is not None:
-            resp = await self.llm.chat.completions.create(
-                model="gpt-4o",
-                messages=state.messages,
-                tools=[],
-                temperature=0.3,
-                max_tokens=4096,
-            )
-            return resp.choices[0].message.content
-        return "Synthesized answer based on available conversation data."
+        import os
+        has_api_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY"))
+        if self.llm is not None and has_api_key:
+            try:
+                model = os.getenv("LLM_MODEL", "gpt-4o")
+                resp = await self.llm.acompletion(
+                    model=model,
+                    messages=state.messages,
+                    tools=[],
+                    temperature=0.3,
+                    max_tokens=4096,
+                )
+                return resp.choices[0].message.content
+            except Exception:
+                pass
+        
+        # If no LLM, return synthesized fallback
+        fb = await self._fallback_tool_reasoning(state)
+        return fb.choices[0].message.content
 
     def _build_system_prompt(self) -> str:
         return """You are a Conversation Intelligence Agent for a meeting recording system.

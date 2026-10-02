@@ -81,13 +81,69 @@ async function ensureOk(response: Response): Promise<void> {
   throw new Error(message);
 }
 
-export async function fetchSessions(): Promise<Session[]> {
-  const response = await fetch(`${API_BASE}/sessions`, { signal: AbortSignal.timeout(10000) });
+export interface SystemServiceHealth {
+  status: string;
+  port?: number;
+  latency_ms?: number;
+  sessions_count?: number;
+  transcripts_count?: number;
+  moms_count?: number;
+  endpoint?: string;
+  bucket?: string;
+  error?: string;
+}
+
+export interface SystemStatus {
+  status: string;
+  timestamp: string;
+  gateway: SystemServiceHealth;
+  postgres: SystemServiceHealth;
+  redis: SystemServiceHealth;
+  agent: SystemServiceHealth;
+  storage: SystemServiceHealth;
+}
+
+/**
+ * Fetches the current health and status of all system components.
+ * @returns A promise resolving to the system status object.
+ */
+export async function fetchSystemStatus(): Promise<SystemStatus> {
+  const response = await fetch(`${API_BASE}/system/status`, { signal: AbortSignal.timeout(5000) });
+  await ensureOk(response);
+  return response.json();
+}
+
+/**
+ * Flushes all test data from the system databases.
+ * @returns A promise resolving to a success message.
+ */
+export async function flushTestData(): Promise<{ message: string }> {
+  const response = await fetch(`${API_BASE}/system/flush-test-data`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(10000),
+  });
+  await ensureOk(response);
+  return response.json();
+}
+
+/**
+ * Fetches a list of sessions, optionally filtered by user ID.
+ * @param userId - Optional user identifier to filter sessions.
+ * @returns A promise resolving to an array of sessions.
+ */
+export async function fetchSessions(userId?: string): Promise<Session[]> {
+  const url = userId ? `${API_BASE}/sessions?user_id=${encodeURIComponent(userId)}` : `${API_BASE}/sessions`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
   await ensureOk(response);
   const data: { sessions: Session[] } = await response.json();
   return data.sessions;
 }
 
+/**
+ * Fetches detailed information for a specific session.
+ * @param sessionId - The unique identifier of the session.
+ * @returns A promise resolving to the session details including segments and MoM.
+ */
 export async function fetchSessionDetails(sessionId: string): Promise<{
   session: Session | null;
   segments: TranscriptSegment[];
@@ -103,7 +159,18 @@ export async function fetchSessionDetails(sessionId: string): Promise<{
   };
 }
 
-export async function createSession(deviceId: string = 'web-gadget-01'): Promise<Session> {
+/**
+ * Creates a new recording or upload session.
+ * @param deviceId - The device identifier creating the session.
+ * @param language - The expected primary language.
+ * @param metadata - Additional metadata for the session.
+ * @returns A promise resolving to the created session.
+ */
+export async function createSession(
+  deviceId: string = 'web-gadget-01',
+  language: string = 'auto',
+  metadata: Record<string, any> = {}
+): Promise<Session> {
   const response = await fetch(`${API_BASE}/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -111,6 +178,8 @@ export async function createSession(deviceId: string = 'web-gadget-01'): Promise
       device_id: deviceId,
       audio_format: 'OPUS',
       sample_rate: 16000,
+      language,
+      metadata,
     }),
     signal: AbortSignal.timeout(10000),
   });
@@ -118,6 +187,12 @@ export async function createSession(deviceId: string = 'web-gadget-01'): Promise
   return response.json();
 }
 
+/**
+ * Uploads an audio file for a session.
+ * @param sessionId - The session identifier.
+ * @param file - The audio file to upload.
+ * @returns A promise resolving to upload status.
+ */
 export async function uploadAudioFile(
   sessionId: string,
   file: File,
@@ -133,6 +208,12 @@ export async function uploadAudioFile(
   return response.json();
 }
 
+/**
+ * Executes a hybrid, semantic, or lexical search over transcripts.
+ * @param query - The search query string.
+ * @param mode - The search algorithm to use.
+ * @returns A promise resolving to an array of search results.
+ */
 export async function runHybridSearch(
   query: string,
   mode: 'HYBRID' | 'SEMANTIC' | 'LEXICAL' = 'HYBRID',
@@ -152,6 +233,12 @@ export async function runHybridSearch(
   return data.results;
 }
 
+/**
+ * Triggers the generation of Minutes of Meeting (MoM) for a session.
+ * @param sessionId - The session identifier.
+ * @param force - Whether to force regeneration if already exists.
+ * @returns A promise resolving when the request succeeds.
+ */
 export async function generateMom(sessionId: string, force = false): Promise<void> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/features`, {
     method: 'POST',
@@ -170,6 +257,12 @@ export interface AgentResponse {
   latency_ms: number;
 }
 
+/**
+ * Submits a query to the AI agent.
+ * @param query - The user's query text.
+ * @param userId - The user's identifier.
+ * @returns A promise resolving to the agent's response.
+ */
 export async function queryAgent(query: string, userId: string = 'user-01'): Promise<AgentResponse> {
   const response = await fetch(`${API_BASE}/agent/query`, {
     method: 'POST',
@@ -182,4 +275,115 @@ export async function queryAgent(query: string, userId: string = 'user-01'): Pro
   });
   await ensureOk(response);
   return response.json();
+}
+
+
+// --- Export APIs ---
+
+/**
+ * Exports the transcript in the requested format.
+ * @param sessionId - The session identifier.
+ * @param format - The export format.
+ * @returns A promise resolving to the exported transcript string.
+ */
+export async function exportTranscript(
+  sessionId: string,
+  format: 'markdown' | 'json' = 'markdown',
+): Promise<string> {
+  const response = await fetch(`${API_BASE}/export/${sessionId}/transcript?format=${format}`, {
+    signal: AbortSignal.timeout(30000),
+  });
+  await ensureOk(response);
+  return response.text();
+}
+
+/**
+ * Exports the Minutes of Meeting in the requested format.
+ * @param sessionId - The session identifier.
+ * @param format - The export format.
+ * @returns A promise resolving to the exported MoM string.
+ */
+export async function exportMom(
+  sessionId: string,
+  format: 'markdown' | 'json' = 'markdown',
+): Promise<string> {
+  const response = await fetch(`${API_BASE}/export/${sessionId}/mom?format=${format}`, {
+    signal: AbortSignal.timeout(30000),
+  });
+  await ensureOk(response);
+  return response.text();
+}
+
+/**
+ * Exports the full session including transcript and MoM.
+ * @param sessionId - The session identifier.
+ * @param format - The export format.
+ * @returns A promise resolving to the exported full session string.
+ */
+export async function exportFullSession(
+  sessionId: string,
+  format: 'markdown' | 'json' = 'markdown',
+): Promise<string> {
+  const response = await fetch(`${API_BASE}/export/${sessionId}/full?format=${format}`, {
+    signal: AbortSignal.timeout(30000),
+  });
+  await ensureOk(response);
+  return response.text();
+}
+
+/**
+ * Deletes a session and its associated data.
+ * @param sessionId - The session identifier.
+ * @returns A promise resolving when the deletion succeeds.
+ */
+export async function deleteSession(sessionId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(10000),
+  });
+  if (response.status !== 204) {
+    await ensureOk(response);
+  }
+}
+
+export interface Language {
+  code: string;
+  name: string;
+}
+
+/**
+ * Fetches the supported languages for transcription.
+ * @returns A promise resolving to languages and default.
+ */
+export async function fetchLanguages(): Promise<{ languages: Language[]; default: string }> {
+  const response = await fetch(`${API_BASE}/languages`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  await ensureOk(response);
+  return response.json();
+}
+
+/**
+ * Submits transcript segments for a session.
+ * @param sessionId - The session identifier.
+ * @param segments - Array of transcript segments to submit.
+ * @returns A promise resolving on success.
+ */
+export async function submitSessionTranscript(
+  sessionId: string,
+  segments: Array<{
+    text: string;
+    speaker_name?: string;
+    start_time?: number;
+    end_time?: number;
+    confidence?: number;
+  }>,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/transcript`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segments }),
+    signal: AbortSignal.timeout(10000),
+  });
+  await ensureOk(response);
 }

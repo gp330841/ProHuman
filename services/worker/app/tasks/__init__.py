@@ -1,3 +1,4 @@
+"""Worker tasks package."""
 from __future__ import annotations
 
 from app.tasks.transcription import transcribe_session

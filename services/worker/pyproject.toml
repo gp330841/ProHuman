@@ -16,8 +16,9 @@ dependencies = [
     "pydantic-settings>=2.0",
     "litellm>=1.40",
     "instructor>=1.3",
-    "deepgram-sdk>=3.4",
+    "deepgram-sdk>=3.4,<4.0",
     "aiobotocore>=2.9",
+    "asgiref>=3.7",
     "pgvector>=0.3",
     "structlog",
 ]
