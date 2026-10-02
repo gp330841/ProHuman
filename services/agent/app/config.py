@@ -19,8 +19,12 @@ class AgentSettings(BaseSettings):
     otlp_endpoint: str = 'http://localhost:4317'
     webhook_allowlist: list[str] = []
     log_level: str = 'INFO'
+    use_ollama: bool = True
+    ollama_base_url: str = "http://ollama:11434"
+    ollama_model: str = "llama3.2:3b"
+    gemini_api_key: str = ""
 
-    model_config = SettingsConfigDict(env_prefix='AGENT_', env_file=".env")
+    model_config = SettingsConfigDict(env_prefix='AGENT_', env_file=".env", extra="ignore")
 
 
 @lru_cache()

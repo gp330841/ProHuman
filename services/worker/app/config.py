@@ -16,7 +16,9 @@ class WorkerSettings(BaseSettings):
     deepgram_api_key: str = ""
     openai_api_key: str = ""
     gemini_api_key: str = ""
-    ollama_base_url: str = "http://host.docker.internal:11434"
+    use_ollama: bool = True
+    ollama_base_url: str = "http://ollama:11434"
+    ollama_model: str = "llama3.2:3b"
     default_llm_model: str = "gemini-3.5-flash-lite"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536

@@ -20,13 +20,15 @@ logger = structlog.get_logger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 class LLMClient:
-    """Client for generating text and structured data via LLMs (Gemini, Ollama, OpenAI)."""
+    """Client for generating text and structured data via LLMs (Ollama, Gemini, OpenAI)."""
     def __init__(self, default_model: str = "gemini-3.5-flash-lite"):
         """Initialize the LLM client."""
         self.default_model = default_model
         self.gemini_api_key = settings.gemini_api_key or os.getenv("GEMINI_API_KEY", "")
         self.openai_api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY", "")
-        self.ollama_base_url = settings.ollama_base_url or os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+        self.ollama_base_url = settings.ollama_base_url or os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        self.ollama_model = getattr(settings, "ollama_model", None) or os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+        self.use_ollama = getattr(settings, "use_ollama", True) and os.getenv("USE_OLLAMA", "true").lower() in ("true", "1", "yes")
 
         # Configure litellm api keys
         if self.openai_api_key:
@@ -47,8 +49,18 @@ class LLMClient:
         max_retries: int = 3, 
         temperature: float = 0.2
     ) -> T:
-        """Generate structured data using Gemini or instructor/litellm."""
-        # 1. Prefer Gemini API if key is present
+        """Generate structured data using Ollama, Gemini or instructor/litellm."""
+        # 1. Prefer Ollama if feature flag is active
+        if self.use_ollama:
+            try:
+                result = await self._call_ollama_structured(messages, response_model)
+                if result:
+                    logger.info("ollama_structured_success", model=self.ollama_model, schema=response_model.__name__)
+                    return result
+            except Exception as e:
+                logger.warning("ollama_structured_attempt_failed_fallback_gemini", error=str(e))
+
+        # 2. Try Gemini API
         if self.gemini_api_key:
             for gemini_model in ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]:
                 try:
@@ -59,7 +71,7 @@ class LLMClient:
                 except Exception as e:
                     logger.warning("gemini_structured_attempt_failed", model=gemini_model, error=str(e))
 
-        # 2. Try instructor with litellm (Ollama, OpenAI)
+        # 3. Try instructor with litellm (Ollama, OpenAI)
         target_model = model or self.default_model
         if self.instructor_client and (self.openai_api_key or "ollama" in target_model):
             try:
@@ -75,6 +87,61 @@ class LLMClient:
                 logger.warning("instructor_structured_failed", error=str(e))
 
         raise RuntimeError("No configured LLM provider succeeded in generating structured response")
+
+    async def _call_ollama_structured(
+        self,
+        messages: list[dict[str, Any]],
+        response_model: Type[T]
+    ) -> T:
+        url = f"{self.ollama_base_url.rstrip('/')}/api/chat"
+        system_text = ""
+        user_text = ""
+        for m in messages:
+            if m.get("role") == "system":
+                system_text += m.get("content", "") + "\n\n"
+            else:
+                user_text += m.get("content", "") + "\n"
+
+        schema_json = json.dumps(response_model.model_json_schema(), indent=2)
+        prompt_system = (
+            f"{system_text}\n"
+            "CRITICAL SCHEMA REQUIREMENT: You MUST output a strictly valid JSON object matching this schema:\n"
+            f"{schema_json}\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Output MUST be valid JSON only. Do NOT output markdown formatting like ```json or explanation.\n"
+            "2. Understand the discussion deeply. Generate a smart executive title.\n"
+            "3. Generate an insightful Executive Summary in conversational Roman Hinglish.\n"
+            "4. Extract genuine decisions and action items with assignees.\n"
+        )
+
+        payload = {
+            "model": self.ollama_model,
+            "messages": [
+                {"role": "system", "content": prompt_system},
+                {"role": "user", "content": user_text}
+            ],
+            "format": "json",
+            "stream": False,
+            "options": {
+                "temperature": 0.2
+            }
+        }
+
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+
+        text_content = data.get("message", {}).get("content", "")
+        cleaned = text_content.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        parsed_json = json.loads(cleaned.strip())
+        return self._normalize_and_validate(parsed_json, response_model)
 
     async def _call_gemini_structured(
         self,
@@ -116,7 +183,9 @@ class LLMClient:
 
         text_content = data["candidates"][0]["content"]["parts"][0]["text"]
         parsed_json = json.loads(text_content)
+        return self._normalize_and_validate(parsed_json, response_model)
 
+    def _normalize_and_validate(self, parsed_json: dict, response_model: Type[T]) -> T:
         # Normalize schema fields
         if response_model.__name__ == "MOMResult":
             parsed_json["title"] = parsed_json.get("title") or parsed_json.get("meeting_title") or parsed_json.get("topic") or "Meeting Summary"
@@ -210,7 +279,26 @@ class LLMClient:
         model: str | None = None, 
         max_tokens: int = 4096
     ) -> str:
-        """Generate unstructured text via Gemini, Ollama, or LiteLLM."""
+        """Generate unstructured text via Ollama, Gemini, or LiteLLM."""
+        if self.use_ollama:
+            try:
+                url = f"{self.ollama_base_url.rstrip('/')}/api/chat"
+                payload = {
+                    "model": self.ollama_model,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {"temperature": 0.3}
+                }
+                async with httpx.AsyncClient(timeout=45.0) as client:
+                    resp = await client.post(url, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        txt = data.get("message", {}).get("content", "")
+                        if txt:
+                            return txt
+            except Exception as e:
+                logger.warning("ollama_generate_text_failed_fallback_gemini", error=str(e))
+
         if self.gemini_api_key:
             for m in ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]:
                 try:

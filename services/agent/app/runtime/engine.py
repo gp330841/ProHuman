@@ -471,6 +471,47 @@ class AgentExecutionEngine:
         import os
         import httpx
 
+        # 1. Check if Ollama is enabled
+        use_ollama = os.getenv("USE_OLLAMA", "true").lower() in ("true", "1", "yes") or \
+                     os.getenv("AGENT_USE_OLLAMA", "true").lower() in ("true", "1", "yes")
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_model = os.getenv("OLLAMA_MODEL") or os.getenv("AGENT_OLLAMA_MODEL") or "llama3.2:3b"
+
+        if use_ollama:
+            try:
+                ollama_messages = []
+                for m in state.messages:
+                    r = m.get("role", "user")
+                    if r not in ("system", "user", "assistant"):
+                        r = "user"
+                    ollama_messages.append({"role": r, "content": str(m.get("content", ""))})
+
+                url = f"{ollama_url.rstrip('/')}/api/chat"
+                payload = {
+                    "model": ollama_model,
+                    "messages": ollama_messages,
+                    "stream": False,
+                    "options": {"temperature": 0.2}
+                }
+                async with httpx.AsyncClient(timeout=45.0) as client:
+                    resp = await client.post(url, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        txt = data.get("message", {}).get("content", "")
+                        if txt:
+                            class OllamaChoice:
+                                def __init__(self, content):
+                                    self.message = type("Msg", (), {"content": content, "tool_calls": []})()
+                            class OllamaResponse:
+                                def __init__(self, content):
+                                    self.choices = [OllamaChoice(content)]
+                                    self.usage = type("Usage", (), {"total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0)})()
+                            logger.info("ollama_agent_call_success", extra={"model": ollama_model})
+                            return OllamaResponse(txt)
+            except Exception as e:
+                logger.warning("ollama_agent_call_failed: %s", e)
+
+        # 2. Fallback to Gemini if configured
         gemini_key = os.getenv("GEMINI_API_KEY")
         if gemini_key:
             # Format contents for Google Gemini API
@@ -636,7 +677,54 @@ class AgentExecutionEngine:
             ),
         })
         import os
-        has_api_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY"))
+        import httpx
+
+        use_ollama = os.getenv("USE_OLLAMA", "true").lower() in ("true", "1", "yes") or \
+                     os.getenv("AGENT_USE_OLLAMA", "true").lower() in ("true", "1", "yes")
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_model = os.getenv("OLLAMA_MODEL") or os.getenv("AGENT_OLLAMA_MODEL") or "llama3.2:3b"
+
+        if use_ollama:
+            try:
+                ollama_messages = [
+                    {"role": m.get("role", "user") if m.get("role") in ("system", "user", "assistant") else "user", 
+                     "content": str(m.get("content", ""))} 
+                    for m in state.messages
+                ]
+                url = f"{ollama_url.rstrip('/')}/api/chat"
+                payload = {
+                    "model": ollama_model,
+                    "messages": ollama_messages,
+                    "stream": False,
+                    "options": {"temperature": 0.3}
+                }
+                async with httpx.AsyncClient(timeout=45.0) as client:
+                    resp = await client.post(url, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        txt = data.get("message", {}).get("content", "")
+                        if txt:
+                            return txt
+            except Exception as e:
+                logger.warning("ollama_force_synthesize_failed: %s", e)
+
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            try:
+                contents = []
+                for m in state.messages:
+                    role = "user" if m.get("role") in ["user", "system"] else "model"
+                    contents.append({"role": role, "parts": [{"text": str(m.get("content", ""))}]})
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={gemini_key}"
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(url, json={"contents": contents})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return data["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception as e:
+                logger.warning("gemini_force_synthesize_failed: %s", e)
+
+        has_api_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
         if self.llm is not None and has_api_key:
             try:
                 model = os.getenv("LLM_MODEL", "gpt-4o")
