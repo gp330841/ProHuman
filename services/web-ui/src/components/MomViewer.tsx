@@ -102,43 +102,49 @@ export const MomViewer: React.FC<Props> = ({
 
   if (!mom) {
     return (
-      <div className="glass-card rounded-3xl p-10 md:p-14 text-center relative overflow-hidden">
-        <div className="w-16 h-16 rounded-3xl bg-slate-100 dark:bg-white/[0.05] border border-slate-200 dark:border-white/[0.08] flex items-center justify-center text-slate-500 dark:text-slate-400 mx-auto mb-4">
-          <FileText className="w-8 h-8 text-sky-500 dark:text-sky-400" />
-        </div>
-        <h3 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">No Meeting Notes Yet</h3>
-        <p className="text-xs md:text-sm text-slate-600 dark:text-slate-400 max-w-md mx-auto mt-2 mb-6 leading-relaxed">
-          Record or upload your audio to automatically generate smart titles, fluent Roman Hinglish summaries, decisions, and action items with Gemini.
-        </p>
-        <button
-          onClick={onGenerateMOM}
-          disabled={isGenerating}
-          className="px-6 py-3 bg-gradient-to-tr from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 disabled:opacity-50 text-white font-semibold rounded-2xl text-xs md:text-sm transition shadow-md shadow-sky-500/25 flex items-center gap-2 mx-auto cursor-pointer"
-        >
-          {isGenerating ? (
-            <>
-              <RefreshCw className="w-4 h-4 animate-spin" />
-              <span>Generating with Gemini...</span>
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-4 h-4" />
-              <span>Generate Minutes & Action Items</span>
-            </>
+      <div className="glass-card rounded-3xl p-10 md:p-16 text-center relative overflow-hidden animate-fade-in">
+        <div className="absolute -top-16 left-1/2 -translate-x-1/2 w-64 h-64 rounded-full bg-sky-400/10 dark:bg-sky-500/10 blur-3xl pointer-events-none" />
+        <div className="relative z-10">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-sky-50 to-indigo-50 dark:from-sky-500/10 dark:to-indigo-500/10 border border-sky-200 dark:border-sky-500/25 flex items-center justify-center mx-auto mb-5 shadow-sm">
+            <FileText className="w-8 h-8 text-sky-500 dark:text-sky-400" />
+          </div>
+          <h3 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">No Meeting Notes Yet</h3>
+          <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-2.5 mb-7 leading-relaxed">
+            Select a session and generate smart AI notes — executive summary, key decisions, and action items in Hinglish.
+          </p>
+          <button
+            onClick={onGenerateMOM}
+            disabled={isGenerating || !sessionId}
+            className="px-7 py-3 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 disabled:opacity-40 text-white font-semibold rounded-2xl text-sm transition shadow-lg shadow-sky-500/25 flex items-center gap-2 mx-auto cursor-pointer"
+          >
+            {isGenerating ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>Generating AI Notes...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4" />
+                <span>Generate Minutes & Action Items</span>
+              </>
+            )}
+          </button>
+          {!sessionId && (
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">Select a session from the sidebar first</p>
           )}
-        </button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in-up">
       {/* Executive Summary Card */}
       <div className="glass-card rounded-3xl p-6 md:p-8 relative overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
           <div>
             <span className="text-[10px] uppercase font-mono px-2.5 py-1 rounded-full bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30 inline-flex items-center gap-1.5 mb-2">
-              ✦ Gemini Intelligence
+              ✦ AI Intelligence
             </span>
             <h3 className="text-xl md:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
               {mom.title || 'Executive Meeting Summary'}
@@ -196,7 +202,7 @@ export const MomViewer: React.FC<Props> = ({
 
         {/* Executive Summary Callout */}
         <div className="p-5 rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.08] backdrop-blur-md mb-5">
-          <p className="text-xs font-semibold text-sky-600 dark:text-sky-400 uppercase tracking-wider mb-2">Executive Summary (Hinglish):</p>
+          <p className="text-xs font-semibold text-sky-600 dark:text-sky-400 uppercase tracking-wider mb-2">Executive Summary:</p>
           <p className="text-xs md:text-sm text-slate-800 dark:text-slate-200 leading-relaxed">
             {mom.executive_summary}
           </p>

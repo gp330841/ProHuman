@@ -5,13 +5,16 @@ import {
   Search,
   Bot,
   Layers,
-  Sparkles,
   RefreshCw,
   Clock,
   ArrowRight,
   Trash2,
   Sun,
   Moon,
+  Menu,
+  X,
+  Mic,
+  ChevronRight,
 } from 'lucide-react';
 
 import { AudioRecorder } from './components/AudioRecorder';
@@ -23,12 +26,12 @@ import { Timeline } from './components/Timeline';
 import { UserSessionModal } from './components/UserSessionModal';
 import { useUser } from './context/UserContext';
 import { useTheme } from './context/ThemeContext';
-import { 
-  fetchSessions, 
-  fetchSessionDetails, 
-  generateMom, 
-  Session, 
-  TranscriptSegment, 
+import {
+  fetchSessions,
+  fetchSessionDetails,
+  generateMom,
+  Session,
+  TranscriptSegment,
   MOMData,
   flushTestData
 } from './api/client';
@@ -47,17 +50,37 @@ export default function App() {
   const [apiError, setApiError] = useState<string | null>(null);
   const [gatewayConnected, setGatewayConnected] = useState(true);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const momSnapshotRef = useRef<string | null>(null);
   const momTimeoutRef = useRef<number | undefined>(undefined);
-
   const [refreshCount, setRefreshCount] = useState(0);
 
   const tabConfig = [
-    { id: 'stream' as const, label: 'Audio & Live Studio', icon: Radio },
-    { id: 'mom' as const, label: 'Transcript & MOM', icon: FileText },
-    { id: 'agent' as const, label: 'ReAct Agent', icon: Bot },
-    { id: 'search' as const, label: 'AI Search', icon: Search },
-    { id: 'timeline' as const, label: 'Memory Timeline', icon: Layers },
+    {
+      id: 'stream' as const, label: 'Live Studio', sublabel: 'Record & capture', icon: Radio,
+      activeIcon: 'text-sky-500 dark:text-sky-400',
+      mobileActive: 'text-sky-600 dark:text-sky-300 bg-sky-50 dark:bg-sky-500/10 border-sky-200 dark:border-sky-500/25',
+    },
+    {
+      id: 'mom' as const, label: 'Transcript & MOM', sublabel: 'Notes & decisions', icon: FileText,
+      activeIcon: 'text-indigo-500 dark:text-indigo-400',
+      mobileActive: 'text-indigo-600 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/10 border-indigo-200 dark:border-indigo-500/25',
+    },
+    {
+      id: 'agent' as const, label: 'AI Agent', sublabel: 'ReAct intelligence', icon: Bot,
+      activeIcon: 'text-violet-500 dark:text-violet-400',
+      mobileActive: 'text-violet-600 dark:text-violet-300 bg-violet-50 dark:bg-violet-500/10 border-violet-200 dark:border-violet-500/25',
+    },
+    {
+      id: 'search' as const, label: 'AI Search', sublabel: 'Semantic explorer', icon: Search,
+      activeIcon: 'text-emerald-500 dark:text-emerald-400',
+      mobileActive: 'text-emerald-600 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/25',
+    },
+    {
+      id: 'timeline' as const, label: 'Memory Timeline', sublabel: 'History view', icon: Layers,
+      activeIcon: 'text-amber-500 dark:text-amber-400',
+      mobileActive: 'text-amber-600 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/25',
+    },
   ];
 
   const loadSessions = async () => {
@@ -152,7 +175,7 @@ export default function App() {
       momSnapshotRef.current = mom ? JSON.stringify(mom) : null;
       setApiError(null);
       await generateMom(selectedSessionId, Boolean(mom));
-      setApiError('Meeting notes are being generated with Gemini in Hinglish...');
+      setApiError('Meeting notes are being generated in Hinglish...');
       momTimeoutRef.current = window.setTimeout(() => {
         setIsGeneratingMom(false);
         momTimeoutRef.current = undefined;
@@ -181,110 +204,163 @@ export default function App() {
     }
   };
 
+  const activeTabConfig = tabConfig.find(t => t.id === activeTab)!;
+
   return (
-    <div className="min-h-screen text-slate-800 dark:text-slate-100 flex flex-col antialiased selection:bg-sky-500/30">
-      {/* Sleek Floating Header */}
-      <header className="border-b border-slate-200/80 dark:border-white/[0.08] bg-white/70 dark:bg-slate-950/70 backdrop-blur-2xl sticky top-0 z-50 transition-all">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between gap-4">
-          {/* Logo / Brand */}
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-sky-400 via-cyan-400 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/25 ring-1 ring-black/10 dark:ring-white/20">
-              <Sparkles className="w-5 h-5 text-white" />
+    <div className="min-h-screen text-slate-800 dark:text-slate-100 flex flex-col antialiased">
+
+      {/* ===== HEADER ===== */}
+      <header className="sticky top-0 z-50 border-b border-slate-200/70 dark:border-white/[0.07] bg-white/75 dark:bg-[#060a12]/80 backdrop-blur-2xl">
+        <div className="max-w-screen-2xl mx-auto px-4 md:px-6 h-[60px] flex items-center gap-4">
+
+          {/* Brand */}
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-sky-400 via-cyan-400 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/30 ring-1 ring-white/20">
+              <Mic className="w-4 h-4 text-white" strokeWidth={2.5} />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-bold text-base tracking-tight text-slate-900 dark:text-white">
-                  ProHuman
-                </h1>
-                <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-sky-50 dark:bg-white/[0.06] text-sky-600 dark:text-sky-400 border border-sky-200 dark:border-white/[0.1] font-semibold">
-                  AI Intelligence
-                </span>
+            <div className="hidden sm:block">
+              <div className="flex items-baseline gap-2">
+                <span className="font-bold text-sm tracking-tight text-slate-900 dark:text-white">ProHuman</span>
+                <span className="text-[9px] uppercase font-mono tracking-widest text-slate-400 dark:text-slate-500">AI Platform</span>
               </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400 hidden sm:block">Personal Conversation Memory & Insights</p>
             </div>
           </div>
 
-          {/* Navigation Pills */}
-          <nav className="flex items-center gap-1 bg-slate-100/80 dark:bg-white/[0.03] p-1 rounded-full border border-slate-200 dark:border-white/[0.08] backdrop-blur-md overflow-x-auto max-w-[48vw] md:max-w-none">
-            {tabConfig.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                onClick={() => setActiveTab(id)}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium transition cursor-pointer ${
-                  activeTab === id
-                    ? 'bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-md shadow-sky-500/20'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">{label}</span>
-              </button>
-            ))}
+          {/* Desktop Tab Navigation */}
+          <nav className="hidden md:flex flex-1 items-center gap-0.5 ml-4">
+            {tabConfig.map(({ id, label, icon: Icon, activeIcon }) => {
+              const isActive = activeTab === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => { setActiveTab(id); setMobileNavOpen(false); }}
+                  className={`relative flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium transition-all duration-200 cursor-pointer ${
+                    isActive
+                      ? 'text-slate-900 dark:text-white bg-white dark:bg-white/[0.07] shadow-sm border border-slate-200/80 dark:border-white/[0.08]'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100/60 dark:hover:bg-white/[0.04]'
+                  }`}
+                >
+                  <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? activeIcon : ''}`} />
+                  <span>{label}</span>
+                  {isActive && (
+                    <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-gradient-to-r from-sky-500 to-indigo-500" />
+                  )}
+                </button>
+              );
+            })}
           </nav>
 
-          {/* Right: Theme Toggle, User Profile & Status */}
-          <div className="flex items-center gap-2">
-            {/* Light / Dark Mode Toggle Button */}
+          {/* Right Controls */}
+          <div className="flex items-center gap-2 ml-auto shrink-0">
+            {/* Connection Status */}
+            <div className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-medium border transition-all ${
+              gatewayConnected
+                ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/25 text-emerald-700 dark:text-emerald-400'
+                : 'bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/25 text-rose-700 dark:text-rose-400'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${gatewayConnected ? 'bg-emerald-500 animate-status-live' : 'bg-rose-500'}`} />
+              <span>{gatewayConnected ? 'Connected' : 'Offline'}</span>
+            </div>
+
+            {/* Theme toggle */}
             <button
               onClick={toggleTheme}
-              className="w-8 h-8 rounded-full flex items-center justify-center glass-pill text-slate-700 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400 transition cursor-pointer"
+              className="w-8 h-8 rounded-lg flex items-center justify-center glass-pill text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition cursor-pointer"
               title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              aria-label="Toggle theme"
             >
-              {theme === 'dark' ? (
-                <Sun className="w-4 h-4 text-amber-400" />
-              ) : (
-                <Moon className="w-4 h-4 text-slate-700" />
-              )}
+              {theme === 'dark'
+                ? <Sun className="w-3.5 h-3.5 text-amber-400" />
+                : <Moon className="w-3.5 h-3.5" />
+              }
             </button>
 
-            {/* User Session Profile Button */}
+            {/* User avatar */}
             <button
               onClick={() => setIsUserModalOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 glass-pill rounded-full hover:border-slate-300 dark:hover:border-white/20 transition cursor-pointer text-left"
-              title="Manage user session & switch profile"
+              className="flex items-center gap-2 px-2.5 py-1.5 glass-pill rounded-xl hover:border-slate-300 dark:hover:border-white/20 transition cursor-pointer"
             >
-              <div
-                className={`w-6 h-6 rounded-full bg-gradient-to-tr ${activeUser.gradient} flex items-center justify-center text-white font-bold text-xs shrink-0 shadow-sm`}
-              >
+              <div className={`w-5 h-5 rounded-lg bg-gradient-to-tr ${activeUser.gradient} flex items-center justify-center text-white font-bold text-[10px] shrink-0 shadow-sm`}>
                 {activeUser.name.charAt(0)}
               </div>
-              <div className="hidden sm:block min-w-0 pr-1">
-                <p className="text-xs font-semibold text-slate-900 dark:text-white leading-tight truncate">{activeUser.name}</p>
-              </div>
+              <span className="hidden sm:block text-xs font-semibold text-slate-900 dark:text-white">{activeUser.name.split(' ')[0]}</span>
             </button>
 
-            {/* Subtle Status Dot */}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.06] text-[11px] font-mono text-slate-600 dark:text-slate-400">
-              <span className={`w-2 h-2 rounded-full ${gatewayConnected ? 'bg-emerald-500 dark:bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-              <span className="hidden md:inline">{gatewayConnected ? 'Live' : 'Offline'}</span>
-            </div>
+            {/* Mobile menu toggle */}
+            <button
+              onClick={() => setMobileNavOpen(p => !p)}
+              className="md:hidden w-8 h-8 rounded-lg flex items-center justify-center glass-pill transition cursor-pointer"
+            >
+              {mobileNavOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+            </button>
           </div>
         </div>
+
+        {/* Mobile Nav Dropdown */}
+        {mobileNavOpen && (
+          <div className="md:hidden border-t border-slate-200 dark:border-white/[0.06] bg-white/95 dark:bg-[#08101e]/95 backdrop-blur-xl px-4 py-3 space-y-1 animate-fade-in">
+            {tabConfig.map(({ id, label, sublabel, icon: Icon, mobileActive }) => {
+              const isActive = activeTab === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => { setActiveTab(id); setMobileNavOpen(false); }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition cursor-pointer ${
+                    isActive
+                      ? `${mobileActive} border font-semibold`
+                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/[0.04]'
+                  }`}
+                >
+                  <Icon className="w-4 h-4 shrink-0" />
+                  <div className="text-left">
+                    <div className="font-medium leading-none">{label}</div>
+                    <div className="text-[10px] opacity-60 mt-0.5">{sublabel}</div>
+                  </div>
+                  {isActive && <ChevronRight className="w-4 h-4 ml-auto opacity-50" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </header>
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 space-y-6">
-        {/* Error / Notice Notification Banner */}
+      {/* ===== MAIN ===== */}
+      <main className="flex-1 max-w-screen-2xl w-full mx-auto px-4 md:px-6 py-6 space-y-5">
+
+        {/* Page Title Row (desktop) */}
+        <div className="hidden md:flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2.5">
+              <activeTabConfig.icon className={`w-5 h-5 ${activeTabConfig.activeIcon}`} />
+              {activeTabConfig.label}
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{activeTabConfig.sublabel}</p>
+          </div>
+          {activeTab === 'stream' && (
+            <button
+              onClick={handleClearData}
+              className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-700 bg-rose-50 dark:bg-rose-500/10 hover:bg-rose-100 border border-rose-200 dark:border-rose-500/25 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Clear Test Data
+            </button>
+          )}
+        </div>
+
+        {/* Error / Info Banner */}
         {apiError && (
-          <div role="status" className={`rounded-2xl border px-4 py-3 text-xs md:text-sm flex items-center justify-between gap-3 shadow-sm ${
-            apiError.includes('queued') || apiError.includes('generated') || apiError.includes('cleared')
-              ? 'border-sky-500/30 bg-sky-50 dark:bg-sky-950/40 text-sky-800 dark:text-sky-200'
-              : 'border-rose-500/30 bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-200'
+          <div role="status" className={`animate-fade-in-up rounded-2xl border px-4 py-3 text-xs flex items-center justify-between gap-3 shadow-sm ${
+            apiError.includes('queued') || apiError.includes('generated') || apiError.includes('cleared') || apiError.includes('Hinglish')
+              ? 'border-sky-400/30 bg-sky-50 dark:bg-sky-950/40 text-sky-800 dark:text-sky-200'
+              : 'border-rose-400/30 bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-200'
           }`}>
             <span>{apiError}</span>
-            <button 
-              onClick={() => setApiError(null)} 
-              className="text-xs opacity-70 hover:opacity-100 underline cursor-pointer"
-            >
-              Dismiss
-            </button>
+            <button onClick={() => setApiError(null)} className="opacity-60 hover:opacity-100 text-[11px] underline cursor-pointer shrink-0">Dismiss</button>
           </div>
         )}
 
-        {/* Tab 1: Live Voice Studio & Recent Sessions */}
+        {/* ─── TAB: Live Studio ─── */}
         {activeTab === 'stream' && (
-          <div className="space-y-6">
+          <div className="space-y-5 animate-fade-in-up">
             <AudioRecorder
               onSessionCreated={handleSessionCreated}
               onViewTranscript={(sessionId) => {
@@ -295,54 +371,45 @@ export default function App() {
               }}
             />
 
-            {/* Recent Recorded Conversations Carousel / List */}
-            <div className="glass-card rounded-3xl p-6 md:p-8 relative overflow-hidden">
-              <div className="flex items-center justify-between mb-4">
+            {/* Recent Sessions */}
+            <div className="glass-card rounded-3xl p-6 md:p-8">
+              <div className="flex items-center justify-between mb-5">
                 <div>
-                  <h3 className="text-base md:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    <Clock className="w-4 h-4 text-sky-500 dark:text-sky-400" />
-                    Recent Conversations & Meetings
+                  <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 text-base">
+                    <Clock className="w-4 h-4 text-sky-500" />
+                    Recent Conversations
                   </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Click any session to view speaker-attributed transcripts, smart executive titles, and MOM
-                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Click a session to view speaker transcript & meeting notes</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={loadSessions}
-                    className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white glass-pill rounded-xl transition cursor-pointer"
-                    title="Refresh sessions"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSessions ? 'animate-spin' : ''}`} />
-                  </button>
-                  <button
-                    onClick={handleClearData}
-                    className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 bg-rose-50 dark:bg-rose-500/10 hover:bg-rose-100 dark:hover:bg-rose-500/20 border border-rose-200 dark:border-rose-500/30 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5"
-                    title="Clear test data"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Clear Test Data</span>
-                  </button>
-                </div>
+                <button
+                  onClick={loadSessions}
+                  className="p-2 glass-pill rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-white transition cursor-pointer"
+                  title="Refresh"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSessions ? 'animate-spin' : ''}`} />
+                </button>
               </div>
 
               {sessions.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {sessions.slice(0, 6).map((s) => (
                     <div
                       key={s.id}
-                      onClick={() => {
-                        setSelectedSessionId(s.id);
-                        setActiveTab('mom');
-                      }}
-                      className="p-4 rounded-2xl bg-white/60 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.08] hover:border-sky-400 dark:hover:border-sky-500/40 hover:bg-slate-50 dark:hover:bg-white/[0.05] transition-all cursor-pointer group flex flex-col justify-between shadow-sm"
+                      onClick={() => { setSelectedSessionId(s.id); setActiveTab('mom'); }}
+                      className="group p-4 rounded-2xl bg-white/60 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.07] hover:border-sky-400/60 dark:hover:border-sky-500/40 hover:shadow-md hover:shadow-sky-500/5 transition-all cursor-pointer glass-card-hover flex flex-col justify-between min-h-[110px]"
                     >
                       <div>
                         <div className="flex items-center justify-between gap-2 mb-2">
-                          <span className="text-xs font-semibold text-slate-800 dark:text-white group-hover:text-sky-600 dark:group-hover:text-sky-400 transition truncate">
+                          <span className="text-xs font-semibold text-slate-900 dark:text-white group-hover:text-sky-600 dark:group-hover:text-sky-400 transition truncate">
                             {s.device_id}
                           </span>
-                          <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
+                          <span className={`text-[9px] uppercase font-mono px-2 py-0.5 rounded-full border shrink-0 ${
+                            s.status === 'COMPLETED'
+                              ? 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/25'
+                              : s.status === 'RECORDING'
+                              ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/25'
+                              : 'bg-slate-100 dark:bg-white/[0.05] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/[0.08]'
+                          }`}>
                             {s.status}
                           </span>
                         </div>
@@ -350,94 +417,88 @@ export default function App() {
                           {new Date(s.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                         </p>
                       </div>
-
-                      <div className="mt-4 pt-3 border-t border-slate-100 dark:border-white/[0.05] flex items-center justify-between text-xs text-sky-600 dark:text-sky-400 group-hover:text-sky-500 dark:group-hover:text-sky-300">
+                      <div className="mt-3 pt-3 border-t border-slate-100 dark:border-white/[0.04] flex items-center justify-between text-[11px] text-sky-600 dark:text-sky-400">
                         <span>Open Transcript & MOM</span>
-                        <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-1" />
+                        <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-8 text-slate-400 dark:text-slate-500 text-xs">
-                  No recorded meetings yet. Tap 'Record' above to capture your first conversation turn.
+                <div className="text-center py-12 space-y-2">
+                  <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.07] flex items-center justify-center mx-auto">
+                    <Mic className="w-6 h-6 text-slate-400" />
+                  </div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">No recordings yet</p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500">Tap the record button above to capture your first conversation</p>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {/* Tab 2: Transcript & MOM */}
+        {/* ─── TAB: Transcript & MOM ─── */}
         {activeTab === 'mom' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Sidebar: Session Selector */}
-            <div className="glass-card rounded-3xl p-5 h-fit space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-white/[0.08]">
+          <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-5 animate-fade-in-up">
+            {/* Sidebar */}
+            <div className="glass-card rounded-3xl p-5 h-fit space-y-4 lg:sticky lg:top-[80px]">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-white/[0.07]">
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                  <Layers className="w-4 h-4 text-sky-500 dark:text-sky-400" /> Meeting History
+                  <Layers className="w-4 h-4 text-indigo-500" /> Sessions
                 </h3>
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => setFilterByUserOnly(!filterByUserOnly)}
                     className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition cursor-pointer ${
                       filterByUserOnly
-                        ? 'bg-sky-50 dark:bg-sky-500/20 border-sky-300 dark:border-sky-500/40 text-sky-700 dark:text-sky-300'
-                        : 'glass-pill text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                        ? 'bg-indigo-50 dark:bg-indigo-500/15 border-indigo-300 dark:border-indigo-500/40 text-indigo-700 dark:text-indigo-300'
+                        : 'glass-pill text-slate-500 dark:text-slate-400'
                     }`}
                   >
-                    {filterByUserOnly ? 'My Sessions' : 'All Sessions'}
+                    {filterByUserOnly ? 'Mine' : 'All'}
                   </button>
-                  <button
-                    onClick={loadSessions}
-                    className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white transition cursor-pointer"
-                  >
+                  <button onClick={loadSessions} className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white transition cursor-pointer">
                     <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSessions ? 'animate-spin' : ''}`} />
                   </button>
                 </div>
               </div>
 
               {sessions.length > 0 ? (
-                <div className="space-y-2 max-h-[550px] overflow-y-auto pr-1">
+                <div className="space-y-1.5 max-h-[520px] overflow-y-auto pr-0.5">
                   {sessions.map((s) => (
                     <button
                       key={s.id}
-                      onClick={() => {
-                        setSelectedSessionId(s.id);
-                        setRefreshCount((c) => c + 1);
-                      }}
-                      className={`w-full text-left p-3.5 rounded-2xl border text-xs transition cursor-pointer ${
+                      onClick={() => { setSelectedSessionId(s.id); setRefreshCount((c) => c + 1); }}
+                      className={`w-full text-left p-3 rounded-2xl border text-xs transition cursor-pointer ${
                         selectedSessionId === s.id
-                          ? 'bg-gradient-to-r from-sky-500/10 to-indigo-500/10 dark:from-sky-500/20 dark:to-indigo-500/20 border-sky-500/50 text-slate-900 dark:text-white shadow-sm'
-                          : 'bg-white/40 dark:bg-white/[0.02] border-slate-200 dark:border-white/[0.06] text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-white/[0.15]'
+                          ? 'bg-gradient-to-r from-indigo-500/10 to-sky-500/10 dark:from-indigo-500/15 dark:to-sky-500/15 border-indigo-400/50 dark:border-indigo-500/40 text-slate-900 dark:text-white shadow-sm'
+                          : 'bg-white/50 dark:bg-white/[0.02] border-slate-200 dark:border-white/[0.05] text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-white/[0.12]'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1">
-                        <span className="font-semibold text-slate-900 dark:text-white">{s.device_id}</span>
-                        <span className="uppercase text-[9px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-white/[0.05] text-slate-500 dark:text-slate-400 font-mono">
+                        <span className="font-semibold text-slate-900 dark:text-white truncate pr-2">{s.device_id}</span>
+                        <span className="uppercase text-[9px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-white/[0.05] text-slate-500 dark:text-slate-400 font-mono shrink-0">
                           {s.status}
                         </span>
                       </div>
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">
                         {new Date(s.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       </p>
                     </button>
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-slate-400 dark:text-slate-500 text-center py-6">No sessions recorded yet.</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500 text-center py-8">No sessions found.</p>
               )}
             </div>
 
-            {/* Main Content Area */}
-            <div className="lg:col-span-2 space-y-6">
+            {/* Main Content */}
+            <div className="space-y-5">
               <MomViewer
                 mom={mom}
                 sessionId={selectedSessionId}
                 onGenerateMOM={handleGenerateMom}
-                onSessionDeleted={() => {
-                  setSelectedSessionId(null);
-                  loadSessions();
-                }}
+                onSessionDeleted={() => { setSelectedSessionId(null); loadSessions(); }}
                 isGenerating={isGeneratingMom}
               />
               <TranscriptViewer segments={segments} isLoading={isLoadingDetails} />
@@ -445,29 +506,34 @@ export default function App() {
           </div>
         )}
 
-        {/* Tab 3: ReAct Agent */}
-        {activeTab === 'agent' && <AgentChat />}
-
-        {/* Tab 4: AI Semantic & Hybrid Search */}
-        {activeTab === 'search' && (
-          <SearchExplorer
-            onSelectSession={(sessionId) => {
-              setSelectedSessionId(sessionId);
-              setActiveTab('mom');
-            }}
-          />
+        {/* ─── TAB: AI Agent ─── */}
+        {activeTab === 'agent' && (
+          <div className="animate-fade-in-up">
+            <AgentChat />
+          </div>
         )}
 
-        {/* Tab 5: Memory Timeline */}
+        {/* ─── TAB: Search ─── */}
+        {activeTab === 'search' && (
+          <div className="animate-fade-in-up">
+            <SearchExplorer
+              onSelectSession={(sessionId) => {
+                setSelectedSessionId(sessionId);
+                setActiveTab('mom');
+              }}
+            />
+          </div>
+        )}
+
+        {/* ─── TAB: Timeline ─── */}
         {activeTab === 'timeline' && (
-          <Timeline
-            sessions={sessions}
-            selectedSessionId={selectedSessionId}
-            onSelectSession={(id) => {
-              setSelectedSessionId(id);
-              setActiveTab('mom');
-            }}
-          />
+          <div className="animate-fade-in-up">
+            <Timeline
+              sessions={sessions}
+              selectedSessionId={selectedSessionId}
+              onSelectSession={(id) => { setSelectedSessionId(id); setActiveTab('mom'); }}
+            />
+          </div>
         )}
       </main>
 

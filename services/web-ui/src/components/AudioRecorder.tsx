@@ -182,9 +182,10 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
 
             for (let i = event.resultIndex; i < event.results.length; i++) {
               const res = event.results[i];
-              const transcriptChunk = selectedLanguage === 'hi' 
-                ? devanagariToHinglish(res[0].transcript) 
-                : res[0].transcript;
+              const rawTranscript = res[0].transcript;
+              const transcriptChunk = selectedLanguage === 'hi'
+                ? devanagariToHinglish(rawTranscript)
+                : rawTranscript;
 
               if (res.isFinal) {
                 finalTurn += ' ' + transcriptChunk;
@@ -243,7 +244,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
     stoppingRef.current = true;
     isRecordingActiveRef.current = false;
     setIsRecording(false);
-    setStatusMessage('Finalizing audio stream & extracting intelligence with Gemini...');
+    setStatusMessage('Finalizing audio stream & extracting intelligence...');
 
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch {}
@@ -280,9 +281,24 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
     }
 
     const currentSessionId = session?.id;
-    if (currentSessionId && speechTurnsRef.current.length > 0) {
+    const finalInterim = interimTextRef.current?.trim() || '';
+    let turns = [...speechTurnsRef.current];
+    if (turns.length === 0 && (liveTranscript || finalInterim)) {
+      const combined = `${liveTranscript} ${finalInterim}`.trim();
+      if (combined) {
+        const nowSec = Math.max(1.0, (Date.now() - recordingStartTimeRef.current) / 1000);
+        turns.push({
+          text: combined,
+          start_time: 0.0,
+          end_time: nowSec,
+        });
+      }
+    }
+
+    if (currentSessionId && turns.length > 0) {
       try {
-        const segmentsPayload = speechTurnsRef.current.map((t) => ({
+        setStatusMessage('Saving transcript & generating AI summary...');
+        const segmentsPayload = turns.map((t) => ({
           text: t.text,
           speaker_name: activeUser.name,
           start_time: t.start_time,
@@ -290,14 +306,15 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
           confidence: 0.95,
         }));
         await submitSessionTranscript(currentSessionId, segmentsPayload);
-      } catch (e) {
+        setCompletedSessionId(currentSessionId);
+        setStatusMessage('Transcript saved! Gemini is summarizing and extracting action items...');
+      } catch (e: any) {
         console.warn('Transcript background sync notice:', e);
+        setStatusMessage(`Saved with warning: ${e.message}`);
       }
-    }
-
-    if (currentSessionId) {
+    } else if (currentSessionId) {
       setCompletedSessionId(currentSessionId);
-      setStatusMessage('Conversation saved! AI features and MOM generated.');
+      setStatusMessage('Session recorded. Speak next time to capture live turns.');
     }
   };
 
@@ -358,7 +375,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
               <h2 className="text-lg md:text-xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
                 Live Conversation Studio
                 <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-                  ✦ Gemini 3.5 Ready
+                  ✦ LLM Ready
                 </span>
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">Capture spoken conversations into structured minutes and action items</p>
@@ -379,7 +396,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                🇮🇳 Hindi / Hinglish
+                🇮🇳 Hindi + English
               </button>
               <button
                 type="button"
@@ -449,14 +466,16 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
                 <span className="font-mono text-2xl font-bold tracking-wider text-slate-900 dark:text-white">
                   {formatTimer(recordingSeconds)}
                 </span>
-                {/* Audio Waveform Bars */}
-                <div className="flex items-center gap-1 h-8 px-2">
-                  <div className="w-1 bg-sky-500 dark:bg-sky-400 rounded-full animate-wave-1" />
-                  <div className="w-1 bg-indigo-500 dark:bg-indigo-400 rounded-full animate-wave-2" />
-                  <div className="w-1 bg-cyan-500 dark:bg-cyan-400 rounded-full animate-wave-3" />
-                  <div className="w-1 bg-emerald-500 dark:bg-emerald-400 rounded-full animate-wave-4" />
-                  <div className="w-1 bg-sky-500 dark:bg-sky-400 rounded-full animate-wave-5" />
-                  <div className="w-1 bg-indigo-500 dark:bg-indigo-400 rounded-full animate-wave-6" />
+                {/* Audio Waveform Bars — 8 bars */}
+                <div className="flex items-end gap-[3px] h-9 px-2">
+                  <div className="w-[3px] bg-gradient-to-t from-sky-500 to-cyan-300 rounded-full animate-wave-1" />
+                  <div className="w-[3px] bg-gradient-to-t from-indigo-500 to-violet-300 rounded-full animate-wave-2" />
+                  <div className="w-[3px] bg-gradient-to-t from-sky-500 to-cyan-300 rounded-full animate-wave-3" />
+                  <div className="w-[3px] bg-gradient-to-t from-rose-500 to-pink-300 rounded-full animate-wave-4" />
+                  <div className="w-[3px] bg-gradient-to-t from-sky-500 to-cyan-300 rounded-full animate-wave-5" />
+                  <div className="w-[3px] bg-gradient-to-t from-indigo-500 to-violet-300 rounded-full animate-wave-6" />
+                  <div className="w-[3px] bg-gradient-to-t from-emerald-500 to-teal-300 rounded-full animate-wave-7" />
+                  <div className="w-[3px] bg-gradient-to-t from-sky-500 to-cyan-300 rounded-full animate-wave-8" />
                 </div>
               </div>
             ) : (
@@ -466,8 +485,8 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
             )}
             <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
               {selectedLanguage === 'hi' 
-                ? 'Speaks in Hindi or English — automatically saved in clean Roman Hinglish MOM.' 
-                : 'Speaks in English — automatically converted into structured meeting notes.'}
+                ? 'Speak in Hindi or English — automatically saved in structured MOM.' 
+                : 'Speak in English — automatically converted into structured meeting notes.'}
             </p>
           </div>
         </div>
@@ -563,7 +582,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
               </div>
               <h4 className="text-base font-bold text-slate-900 dark:text-white">Your Meeting is Processed</h4>
               <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
-                Gemini has generated your executive title, Roman Hinglish summary, key decisions, and action items.
+                AI has generated your executive title, Roman Hinglish summary, key decisions, and action items.
               </p>
             </div>
             <button

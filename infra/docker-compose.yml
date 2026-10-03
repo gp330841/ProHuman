@@ -80,6 +80,7 @@ services:
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-audio-recordings}
       GATEWAY_S3_BUCKET_NAME: ${S3_BUCKET_NAME:-audio-recordings}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GATEWAY_LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PYTHONPATH: /app
     volumes:
@@ -188,13 +189,8 @@ services:
       WORKER_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      WORKER_GEMINI_API_KEY: ${WORKER_GEMINI_API_KEY:-}
-      USE_OLLAMA: ${USE_OLLAMA:-true}
-      WORKER_USE_OLLAMA: ${WORKER_USE_OLLAMA:-true}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      WORKER_OLLAMA_BASE_URL: ${WORKER_OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
-      WORKER_OLLAMA_MODEL: ${WORKER_OLLAMA_MODEL:-llama3.2:3b}
+      WORKER_GEMINI_API_KEY: ${WORKER_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}
+      WORKER_DEFAULT_LLM_MODEL: ${WORKER_DEFAULT_LLM_MODEL:-gemini-3.8-flash}
       PYTHONPATH: /app
     volumes:
       - ../services/worker/app:/app/app:ro
@@ -220,14 +216,8 @@ services:
       AGENT_REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      AGENT_GEMINI_API_KEY: ${AGENT_GEMINI_API_KEY:-}
-      USE_OLLAMA: ${USE_OLLAMA:-true}
-      AGENT_USE_OLLAMA: ${AGENT_USE_OLLAMA:-true}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      AGENT_OLLAMA_BASE_URL: ${AGENT_OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
-      AGENT_OLLAMA_MODEL: ${AGENT_OLLAMA_MODEL:-llama3.2:3b}
-      AGENT_DEFAULT_LLM_MODEL: ${AGENT_DEFAULT_LLM_MODEL:-gemini-3.5-flash-lite}
+      AGENT_GEMINI_API_KEY: ${AGENT_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}
+      AGENT_DEFAULT_LLM_MODEL: ${AGENT_DEFAULT_LLM_MODEL:-gemini-3.8-flash}
       AGENT_LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PYTHONPATH: /app
     volumes:
@@ -244,17 +234,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - prohuman-net
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: prohuman-ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
     networks:
       - prohuman-net
 
@@ -282,8 +261,6 @@ volumes:
   redis_data:
     driver: local
   minio_data:
-    driver: local
-  ollama_data:
     driver: local
 
 networks:

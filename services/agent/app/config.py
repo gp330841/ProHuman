@@ -8,7 +8,7 @@ class AgentSettings(BaseSettings):
     """Configuration settings for the agent service."""
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman"
     redis_url: str = "redis://localhost:6379/0"
-    default_llm_model: str = 'gpt-4o'
+    default_llm_model: str = "gemini-3.8-flash"
     embedding_model: str = 'text-embedding-3-small'
     max_total_hops: int = 15
     max_hops_per_subgoal: int = 5
@@ -19,9 +19,6 @@ class AgentSettings(BaseSettings):
     otlp_endpoint: str = 'http://localhost:4317'
     webhook_allowlist: list[str] = []
     log_level: str = 'INFO'
-    use_ollama: bool = True
-    ollama_base_url: str = "http://ollama:11434"
-    ollama_model: str = "llama3.2:3b"
     gemini_api_key: str = ""
 
     model_config = SettingsConfigDict(env_prefix='AGENT_', env_file=".env", extra="ignore")

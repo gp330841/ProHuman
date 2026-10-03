@@ -275,8 +275,9 @@ class AgentExecutionEngine:
             span.set_attribute("user_id", user_id)
             span.set_attribute("user_query", user_query)
 
+            grounding_ctx = await self._fetch_grounding_context(user_id)
             state.messages = [
-                {"role": "system", "content": self._build_system_prompt()},
+                {"role": "system", "content": self._build_system_prompt(grounding_ctx)},
                 {"role": "user", "content": user_query},
             ]
 
@@ -471,48 +472,8 @@ class AgentExecutionEngine:
         import os
         import httpx
 
-        # 1. Check if Ollama is enabled
-        use_ollama = os.getenv("USE_OLLAMA", "true").lower() in ("true", "1", "yes") or \
-                     os.getenv("AGENT_USE_OLLAMA", "true").lower() in ("true", "1", "yes")
-        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-        ollama_model = os.getenv("OLLAMA_MODEL") or os.getenv("AGENT_OLLAMA_MODEL") or "llama3.2:3b"
-
-        if use_ollama:
-            try:
-                ollama_messages = []
-                for m in state.messages:
-                    r = m.get("role", "user")
-                    if r not in ("system", "user", "assistant"):
-                        r = "user"
-                    ollama_messages.append({"role": r, "content": str(m.get("content", ""))})
-
-                url = f"{ollama_url.rstrip('/')}/api/chat"
-                payload = {
-                    "model": ollama_model,
-                    "messages": ollama_messages,
-                    "stream": False,
-                    "options": {"temperature": 0.2}
-                }
-                async with httpx.AsyncClient(timeout=45.0) as client:
-                    resp = await client.post(url, json=payload)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        txt = data.get("message", {}).get("content", "")
-                        if txt:
-                            class OllamaChoice:
-                                def __init__(self, content):
-                                    self.message = type("Msg", (), {"content": content, "tool_calls": []})()
-                            class OllamaResponse:
-                                def __init__(self, content):
-                                    self.choices = [OllamaChoice(content)]
-                                    self.usage = type("Usage", (), {"total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0)})()
-                            logger.info("ollama_agent_call_success", extra={"model": ollama_model})
-                            return OllamaResponse(txt)
-            except Exception as e:
-                logger.warning("ollama_agent_call_failed: %s", e)
-
-        # 2. Fallback to Gemini if configured
-        gemini_key = os.getenv("GEMINI_API_KEY")
+        # 1. Primary: Google Gemini API (1500 free daily requests)
+        gemini_key = os.getenv("GEMINI_API_KEY") or getattr(self.config, "gemini_api_key", None)
         if gemini_key:
             # Format contents for Google Gemini API
             contents = []
@@ -520,22 +481,35 @@ class AgentExecutionEngine:
                 role = "user" if m.get("role") in ["user", "system"] else "model"
                 contents.append({"role": role, "parts": [{"text": str(m.get("content", ""))}]})
 
-            for m_name in ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]:
+            gemini_models = [
+                "gemini-3.8-flash",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-2.5-flash",
+                "gemini-2.0-flash",
+                "gemini-1.5-flash",
+            ]
+            for m_name in gemini_models:
                 try:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key}"
                     async with httpx.AsyncClient(timeout=30.0) as client:
                         resp = await client.post(url, json={"contents": contents})
                         if resp.status_code == 200:
                             data = resp.json()
-                            txt = data["candidates"][0]["content"]["parts"][0]["text"]
-                            class GeminiChoice:
-                                def __init__(self, content):
-                                    self.message = type("Msg", (), {"content": content, "tool_calls": []})()
-                            class GeminiResponse:
-                                def __init__(self, content):
-                                    self.choices = [GeminiChoice(content)]
-                                    self.usage = type("Usage", (), {"total_tokens": data.get("usageMetadata", {}).get("totalTokenCount", 50)})()
-                            return GeminiResponse(txt)
+                            candidates = data.get("candidates", [])
+                            if candidates and "content" in candidates[0]:
+                                parts = candidates[0]["content"].get("parts", [])
+                                if parts and "text" in parts[0]:
+                                    txt = parts[0]["text"]
+                                    class GeminiChoice:
+                                        def __init__(self, content):
+                                            self.message = type("Msg", (), {"content": content, "tool_calls": []})()
+                                    class GeminiResponse:
+                                        def __init__(self, content):
+                                            self.choices = [GeminiChoice(content)]
+                                            self.usage = type("Usage", (), {"total_tokens": data.get("usageMetadata", {}).get("totalTokenCount", 50)})()
+                                    logger.info("gemini_agent_call_success", model=m_name)
+                                    return GeminiResponse(txt)
                 except Exception as e:
                     logger.warning("gemini_agent_call_failed", model=m_name, error=str(e))
 
@@ -673,54 +647,42 @@ class AgentExecutionEngine:
             "role": "user",
             "content": (
                 "[SYSTEM] Synthesize a complete response to the user's original question "
-                "using the tool results gathered so far in Hinglish."
+                "using the tool results gathered so far in clear English or natural Hindi+English based on user preference."
             ),
         })
         import os
         import httpx
 
-        use_ollama = os.getenv("USE_OLLAMA", "true").lower() in ("true", "1", "yes") or \
-                     os.getenv("AGENT_USE_OLLAMA", "true").lower() in ("true", "1", "yes")
-        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-        ollama_model = os.getenv("OLLAMA_MODEL") or os.getenv("AGENT_OLLAMA_MODEL") or "llama3.2:3b"
-
-        if use_ollama:
-            try:
-                ollama_messages = [
-                    {"role": m.get("role", "user") if m.get("role") in ("system", "user", "assistant") else "user", 
-                     "content": str(m.get("content", ""))} 
-                    for m in state.messages
-                ]
-                url = f"{ollama_url.rstrip('/')}/api/chat"
-                payload = {
-                    "model": ollama_model,
-                    "messages": ollama_messages,
-                    "stream": False,
-                    "options": {"temperature": 0.3}
-                }
-                async with httpx.AsyncClient(timeout=45.0) as client:
-                    resp = await client.post(url, json=payload)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        txt = data.get("message", {}).get("content", "")
-                        if txt:
-                            return txt
-            except Exception as e:
-                logger.warning("ollama_force_synthesize_failed: %s", e)
-
-        gemini_key = os.getenv("GEMINI_API_KEY")
+        gemini_key = os.getenv("GEMINI_API_KEY") or getattr(self.config, "gemini_api_key", None)
         if gemini_key:
             try:
                 contents = []
                 for m in state.messages:
                     role = "user" if m.get("role") in ["user", "system"] else "model"
                     contents.append({"role": role, "parts": [{"text": str(m.get("content", ""))}]})
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={gemini_key}"
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(url, json={"contents": contents})
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+                gemini_models = [
+                    "gemini-3.8-flash",
+                    "gemini-3.5-flash",
+                    "gemini-3.5-flash-lite",
+                    "gemini-2.5-flash",
+                    "gemini-2.0-flash",
+                    "gemini-1.5-flash",
+                ]
+                for m_name in gemini_models:
+                    try:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key}"
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            resp = await client.post(url, json={"contents": contents})
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                candidates = data.get("candidates", [])
+                                if candidates and "content" in candidates[0]:
+                                    parts = candidates[0]["content"].get("parts", [])
+                                    if parts and "text" in parts[0]:
+                                        return parts[0]["text"]
+                    except Exception as e:
+                        logger.warning("gemini_force_synthesize_failed_for_model", model=m_name, error=str(e))
             except Exception as e:
                 logger.warning("gemini_force_synthesize_failed: %s", e)
 
@@ -743,21 +705,82 @@ class AgentExecutionEngine:
         fb = await self._fallback_tool_reasoning(state)
         return fb.choices[0].message.content
 
-    def _build_system_prompt(self) -> str:
-        return """You are a Conversation Intelligence Agent for a meeting recording system.
-You have access to a database of transcribed conversations with speaker diarization,
-semantic search, and AI-extracted meeting intelligence.
+    async def _fetch_grounding_context(self, user_id: str | None = None) -> str:
+        """Fetch latest meeting transcripts, summaries, decisions, and action items from PostgreSQL."""
+        try:
+            from packages.db.engine import get_db_context
+            from packages.db.repositories.session_repo import SessionRepository
+            from packages.db.repositories.feature_repo import FeatureRepository
+            from packages.db.repositories.transcript_repo import TranscriptRepository
 
-## Tool Use Guidelines
-1. **search_conversations**: Use FIRST to find relevant meetings/segments.
-2. **fetch_conversation_context**: Use AFTER search to get surrounding transcript context.
-3. **generate_mom_and_actions**: Use when asked for meeting notes, summaries, or action items.
-4. **query_action_items**: Use for questions about tasks, commitments, deadlines across meetings.
-5. **trigger_external_action**: Use ONLY when explicitly asked to share/export content.
+            async with get_db_context() as db_session:
+                sess_repo = SessionRepository(db_session)
+                feat_repo = FeatureRepository(db_session)
+                trans_repo = TranscriptRepository(db_session)
 
-## Anti-Hallucination Rules
-- NEVER fabricate meeting content, speaker names, or dates.
-- Cite specific timestamps and speaker labels from tool results."""
+                sessions, _ = await sess_repo.list_sessions(limit=5, offset=0)
+                if not sessions:
+                    return "No recorded meetings found in the database."
+
+                blocks = []
+                for s in sessions:
+                    mom = await feat_repo.get_by_session_and_name(s.id, "mom")
+                    summary = await feat_repo.get_by_session_and_name(s.id, "summary")
+                    action_items = await feat_repo.get_by_session_and_name(s.id, "action_items")
+                    segments = await trans_repo.get_by_session(s.id)
+
+                    b = [f"=== MEETING SESSION ID: {s.id} | Device: {s.device_id} | Status: {s.status} | Date: {s.created_at} ==="]
+                    if summary and summary.data:
+                        sd = summary.data
+                        if sd.get("title"): b.append(f"Title: {sd.get('title')}")
+                        if sd.get("executive_summary"): b.append(f"Executive Summary: {sd.get('executive_summary')}")
+                        if sd.get("key_topics"): b.append(f"Key Topics: {', '.join(sd.get('key_topics', []))}")
+                    elif mom and mom.data:
+                        md = mom.data
+                        if md.get("title"): b.append(f"Title: {md.get('title')}")
+                        if md.get("executive_summary"): b.append(f"Executive Summary: {md.get('executive_summary')}")
+
+                    if mom and mom.data:
+                        md = mom.data
+                        if md.get("decisions"):
+                            decs = [f"- {d.get('description', '')}" for d in md.get("decisions", []) if d.get('description')]
+                            if decs: b.append("Key Decisions:\n" + "\n".join(decs))
+                        if md.get("action_items"):
+                            acts = [f"- {a.get('description', '')} (Assignee: {a.get('assignee', 'Team')}, Priority: {a.get('priority', 'medium')})" for a in md.get("action_items", []) if a.get('description')]
+                            if acts: b.append("MOM Action Items:\n" + "\n".join(acts))
+                        if md.get("attendees"):
+                            b.append(f"Attendees: {', '.join(md.get('attendees'))}")
+
+                    if action_items and action_items.data:
+                        items = action_items.data.get("items", [])
+                        if items:
+                            acts2 = [f"- {it.get('description', '')} (Assignee: {it.get('assignee', 'Team')})" for it in items if it.get('description')]
+                            if acts2: b.append("Action Items List:\n" + "\n".join(acts2))
+
+                    if segments:
+                        turn_lines = [f"[{seg.start_time:.1f}s - {seg.end_time:.1f}s] {seg.speaker_label}: {seg.text}" for seg in segments[:25]]
+                        b.append("Transcript Turns:\n" + "\n".join(turn_lines))
+
+                    blocks.append("\n".join(b))
+
+                return "\n\n".join(blocks)
+        except Exception as e:
+            logger.warning("Failed to fetch grounding context: %s", e)
+            return ""
+
+    def _build_system_prompt(self, grounding_context: str = "") -> str:
+        ctx_section = f"\n\n## Ground-Truth Meeting Database Context\nThe following verified meeting records are loaded directly from the database:\n\n{grounding_context}\n" if grounding_context else ""
+        return f"""You are the ProHuman Conversation Intelligence Agent for a meeting recording platform.
+You have verified direct access to the user's recorded meetings, transcripts, decisions, and action items shown below.
+
+{ctx_section}
+
+## Instructions:
+1. Always respond in natural Roman Hinglish or English based on the user's language and query.
+2. When asked about meeting summaries, decisions, action items, or specific topics, use the ground-truth meeting database context above.
+3. Be helpful, clear, and cite specific speaker names, decisions, or timestamps whenever available.
+4. If the database context has the meeting (e.g. Asian Games, cricket, etc.), explain and summarize it clearly!
+5. Never claim you don't have access to the database or transcripts, because the verified records are right in your context."""
 
     def _format_tool_result(self, result: ToolResult) -> str:
         if result.success:

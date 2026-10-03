@@ -32,14 +32,16 @@ class SummaryProvider(BaseFeatureProvider):
                 "role": "system",
                 "content": (
                     "You are an expert meeting summarizer. "
-                    "CRITICAL LANGUAGE INSTRUCTION: You MUST ALWAYS write the title, executive summary, "
-                    "and key topics in conversational, fluent Hinglish (conversational mix of Hindi and English "
-                    "written strictly in Latin/Roman script). Never use Devanagari script."
+                    "LANGUAGE INSTRUCTION: Generate the title, executive summary, and key topics in clean English or natural Hindi+English. "
+                    "If the conversation is in English, respond in English. "
+                    "If the conversation is in Hindi or mixed, respond in natural Hindi+English (Hinglish written in Latin/Roman script). "
+                    "Keep all technical, business, and product terms in standard English. "
+                    "If the speaker suggests a specific title for the meeting (e.g. 'iska title rakhna...'), adopt that title."
                 )
             },
             {
                 "role": "user",
-                "content": f"Please summarize this transcript in Hinglish:\n\n{transcript_text}"
+                "content": f"Please summarize this transcript:\n\n{transcript_text}"
             }
         ]
 

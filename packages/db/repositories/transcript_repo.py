@@ -67,24 +67,24 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
             FROM transcript_segments
             WHERE embedding IS NOT NULL
               AND :search_mode != 'LEXICAL'
-              AND (:session_ids_len = 0 OR session_id = ANY(:session_ids))
-              AND (:time_start IS NULL OR created_at >= :time_start)
-              AND (:time_end IS NULL OR created_at <= :time_end)
+              AND (:session_ids_len = 0 OR session_id = ANY(CAST(:session_ids AS uuid[])))
+              AND (CAST(:time_start AS timestamptz) IS NULL OR created_at >= CAST(:time_start AS timestamptz))
+              AND (CAST(:time_end AS timestamptz) IS NULL OR created_at <= CAST(:time_end AS timestamptz))
             ORDER BY embedding <=> CAST(:query_embedding AS vector)
             LIMIT :sub_limit
         ),
         text_search AS (
             SELECT
                 id,
-                1.0 / (:rrf_k + ROW_NUMBER() OVER (ORDER BY ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) DESC)) as text_score,
-                ROW_NUMBER() OVER (ORDER BY ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) DESC) as text_rank
+                1.0 / (:rrf_k + ROW_NUMBER() OVER (ORDER BY (CASE WHEN search_vector @@ websearch_to_tsquery('english', :query_text) THEN ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) ELSE 0.05 END) DESC)) as text_score,
+                ROW_NUMBER() OVER (ORDER BY (CASE WHEN search_vector @@ websearch_to_tsquery('english', :query_text) THEN ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) ELSE 0.05 END) DESC) as text_rank
             FROM transcript_segments
             WHERE :search_mode != 'SEMANTIC'
-              AND search_vector @@ websearch_to_tsquery('english', :query_text)
-              AND (:session_ids_len = 0 OR session_id = ANY(:session_ids))
-              AND (:time_start IS NULL OR created_at >= :time_start)
-              AND (:time_end IS NULL OR created_at <= :time_end)
-            ORDER BY ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) DESC
+              AND (search_vector @@ websearch_to_tsquery('english', :query_text) OR text ILIKE '%' || :query_text || '%')
+              AND (:session_ids_len = 0 OR session_id = ANY(CAST(:session_ids AS uuid[])))
+              AND (CAST(:time_start AS timestamptz) IS NULL OR created_at >= CAST(:time_start AS timestamptz))
+              AND (CAST(:time_end AS timestamptz) IS NULL OR created_at <= CAST(:time_end AS timestamptz))
+            ORDER BY (CASE WHEN search_vector @@ websearch_to_tsquery('english', :query_text) THEN ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) ELSE 0.05 END) DESC
             LIMIT :sub_limit
         )
         SELECT

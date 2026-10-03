@@ -32,17 +32,16 @@ class MOMProvider(BaseFeatureProvider):
                 "role": "system",
                 "content": (
                     "You are a meticulous chief of staff and conversation intelligence assistant. "
-                    "CRITICAL LANGUAGE REQUIREMENT: You MUST ALWAYS generate the complete Minutes of Meeting (MOM) "
-                    "in natural, professional Hinglish (a conversational blend of Hindi and English written strictly in Latin/Roman script). "
-                    "Even if the speaker spoke entirely in English or entirely in Hindi, the output (title, executive_summary, "
-                    "agenda_items, decisions, action_items, follow_ups) MUST be in Hinglish. "
-                    "Never output Devanagari script. Use fluent, clean Roman Hinglish "
-                    "(e.g., 'Discussion points review kiye gaye', 'Team ne production deployment Friday ko plan kiya')."
+                    "LANGUAGE INSTRUCTION: Generate the complete Minutes of Meeting (MOM) in clean, professional English or natural Hindi+English. "
+                    "If the conversation is in English, respond in English. "
+                    "If the conversation is in Hindi or mixed, respond in natural Hindi+English. "
+                    "Keep all technical, business, and product terms in standard English (e.g., 'model', 'transcription', 'summary', 'deployment', 'testing', 'implementation'). "
+                    "Never use artificial or broken phonetic transliterations."
                 )
             },
             {
                 "role": "user",
-                "content": f"Generate complete Hinglish MOM from this transcript:\n\n{transcript_text}"
+                "content": f"Generate structured meeting minutes (MOM) from this transcript:\n\n{transcript_text}"
             }
         ]
 
@@ -58,18 +57,17 @@ class MOMProvider(BaseFeatureProvider):
             logger.warning("llm_mom_failed_falling_back_to_extractive", error=str(e))
             from datetime import datetime
             from packages.contracts.features import AgendaItem, Decision, ActionItem, FollowUp
-            from packages.contracts.hinglish import devanagari_to_hinglish
 
             attendees = list(dict.fromkeys([seg.speaker_label for seg in segments])) or ["Speaker 1"]
-            full_text = " ".join([devanagari_to_hinglish(seg.text) for seg in segments if seg.text])
+            full_text = " ".join([seg.text for seg in segments if seg.text])
             title = f"Meeting - {datetime.now().strftime('%b %d, %Y')}"
             if len(segments) > 0 and len(segments[0].text) > 5:
-                words = devanagari_to_hinglish(segments[0].text).split()[:7]
+                words = segments[0].text.split()[:7]
                 title = " ".join(words).title()
 
             action_items = []
             for seg in segments:
-                h_text = devanagari_to_hinglish(seg.text)
+                h_text = seg.text
                 lower = h_text.lower()
                 if any(kw in lower for kw in ["need to", "will", "todo", "action", "assign", "please", "make sure", "ensure", "karenge", "karna", "dekhna", "check"]):
                     action_items.append(ActionItem(

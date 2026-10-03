@@ -228,9 +228,57 @@ async def execute_generate_mom(
         transcript_text = "\n".join([f"{s.speaker_label}: {s.text}" for s in segments])
 
         import os
+        import httpx
         mom_data = None
-        has_api_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY"))
-        if has_api_key:
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key:
+            system_prompt = (
+                "Extract meeting notes as strictly valid JSON with keys: title (str), attendees (list of str), "
+                "agenda_items (list of objects with topic, summary, speakers_involved), "
+                "decisions (list of objects with decision, rationale, decided_by, timestamp_seconds), "
+                "action_items (list of objects with task, assignee, due_date, priority, status), "
+                "follow_ups (list of objects with topic, owner, context), "
+                "and executive_summary (str). Write in clean English or natural Hindi+English (use standard English for technical and business terms). "
+                "If any speaker explicitly suggests, dictates, or asks to keep a specific title (e.g. 'iska title rakhna...', 'title suggest kar raha hoon ki...'), adopt that exact title! "
+                "Output JSON only."
+            )
+            payload = {
+                "contents": [{"parts": [{"text": f"{system_prompt}\n\nTranscript:\n{transcript_text[:12000]}"}]}],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "temperature": 0.2,
+                }
+            }
+            gemini_models = [
+                "gemini-3.8-flash",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-2.5-flash",
+                "gemini-2.0-flash",
+                "gemini-1.5-flash",
+            ]
+            for m_name in gemini_models:
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key}"
+                    async with httpx.AsyncClient(timeout=45.0) as client:
+                        resp = await client.post(url, json=payload)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            content = data["candidates"][0]["content"]["parts"][0]["text"]
+                            cleaned = content.strip()
+                            if cleaned.startswith("```json"):
+                                cleaned = cleaned[7:]
+                            elif cleaned.startswith("```"):
+                                cleaned = cleaned[3:]
+                            if cleaned.endswith("```"):
+                                cleaned = cleaned[:-3]
+                            mom_data = json.loads(cleaned.strip())
+                            break
+                except Exception:
+                    pass
+
+        has_api_key = bool(os.getenv("OPENAI_API_KEY"))
+        if not mom_data and has_api_key:
             try:
                 import litellm
                 messages = [
