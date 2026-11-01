@@ -50,7 +50,8 @@ async def _transcribe_session_async(session_id: str, s3_key: str) -> None:
             async with session.client('s3',
                                       endpoint_url=settings.s3_endpoint_url,
                                       aws_access_key_id=settings.s3_access_key,
-                                      aws_secret_access_key=settings.s3_secret_key) as s3_client:
+                                      aws_secret_access_key=settings.s3_secret_key,
+                                      region_name="auto") as s3_client:
                 audio_url = await s3_client.generate_presigned_url(
                     'get_object',
                     Params={'Bucket': settings.s3_bucket_name, 'Key': s3_key},

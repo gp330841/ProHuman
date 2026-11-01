@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir build setuptools wheel
+
+COPY services/worker/pyproject.toml .
+COPY services/worker/app ./app
+
+RUN pip install --no-cache-dir .
+
+COPY packages ./packages
+
+ENV PYTHONPATH=/app
+
+EXPOSE 8002
+
+CMD ["python", "-m", "app.container_entrypoint"]

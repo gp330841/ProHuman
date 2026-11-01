@@ -32,8 +32,8 @@ def create_db_engine(database_url: str, **kwargs) -> AsyncEngine:
     """
     global async_session_factory
     engine_kwargs = {
-        "pool_size": 20,
-        "max_overflow": 10,
+        "pool_size": int(os.environ.get("DB_POOL_SIZE", "20")),
+        "max_overflow": int(os.environ.get("DB_MAX_OVERFLOW", "10")),
         "pool_pre_ping": True,
         "pool_recycle": 1800,
     }
@@ -99,4 +99,3 @@ async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
-

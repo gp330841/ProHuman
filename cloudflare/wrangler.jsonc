@@ -1,0 +1,77 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "prohuman",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "secrets": {
+    "required": [
+      "DATABASE_URL",
+      "REDIS_URL",
+      "R2_ENDPOINT_URL",
+      "R2_ACCESS_KEY_ID",
+      "R2_SECRET_ACCESS_KEY",
+      "R2_BUCKET_NAME",
+      "DEEPGRAM_API_KEY",
+      "GEMINI_API_KEY"
+    ]
+  },
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "../services/web-ui/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/ws/*"]
+  },
+  "containers": [
+    {
+      "class_name": "GatewayContainer",
+      "image": "../Dockerfile.cloudflare-gateway",
+      "instance_type": "basic",
+      "max_instances": 5
+    },
+    {
+      "class_name": "AgentContainer",
+      "image": "../Dockerfile.cloudflare-agent",
+      "instance_type": "basic",
+      "max_instances": 5
+    },
+    {
+      "class_name": "CeleryContainer",
+      "image": "../Dockerfile.cloudflare-worker",
+      "instance_type": "basic",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GATEWAY",
+        "class_name": "GatewayContainer"
+      },
+      {
+        "name": "AGENT",
+        "class_name": "AgentContainer"
+      },
+      {
+        "name": "CELERY",
+        "class_name": "CeleryContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "GatewayContainer",
+        "AgentContainer",
+        "CeleryContainer"
+      ]
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  }
+}

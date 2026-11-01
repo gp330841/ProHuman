@@ -9,6 +9,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
+from app.config import get_settings
 from app.dependencies import get_db, get_redis, get_storage
 from app.services.storage import S3StorageService
 from packages.db.models.session import Session
@@ -83,7 +84,7 @@ async def get_system_status(
     agent_start = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get("http://agent:8001/health")
+            resp = await client.get(f"{get_settings().agent_service_url}/health")
             agent_latency = int((time.perf_counter() - agent_start) * 1000)
             if resp.status_code == 200:
                 health_data["agent"] = {
@@ -104,8 +105,8 @@ async def get_system_status(
     try:
         health_data["storage"] = {
             "status": "ONLINE",
-            "endpoint": "minio:9000",
-            "bucket": "audio-recordings",
+            "endpoint": get_settings().s3_endpoint_url,
+            "bucket": get_settings().s3_bucket_name,
         }
     except Exception as e:
         health_data["storage"] = {"status": "ERROR", "error": str(e)}

@@ -231,6 +231,7 @@ pip install ruff mypy pytest pytest-asyncio alembic
 | `OPENAI_API_KEY` | *None* | OpenAI API key for LLM and embeddings |
 | `GATEWAY_DATABASE_URL` | *None* | Gateway DB connection override |
 | `GATEWAY_REDIS_URL` | *None* | Gateway Redis connection override |
+| `GATEWAY_AGENT_SERVICE_URL` | `http://agent:8001` | Gateway's Agent health-check endpoint |
 | `GATEWAY_MAX_WS_CONNECTIONS` | `100` | Gateway max concurrent WebSocket connections |
 | `GATEWAY_RATE_LIMIT_REQUESTS_PER_MINUTE` | `100` | Gateway rate limit threshold |
 | `WORKER_DEFAULT_LLM_MODEL` | `gpt-4o` | Default model for feature extraction |
@@ -260,3 +261,58 @@ The repository includes a complete GitHub Actions pipeline (`.github/workflows/c
 1. **Lint & Type Check**: Validates PEP 8 styling with `ruff` and type soundness with `mypy`.
 2. **Database & Service Tests**: Spins up real PostgreSQL with `pgvector` and Redis service containers to test `packages/`, `services/gateway/`, `services/worker/`, and `services/agent/`.
 3. **Container Builds**: Validates Docker image builds for the Gateway, Worker, and Agent services.
+
+---
+
+## Cloudflare Deployment
+
+The `cloudflare/` directory deploys the React UI as Worker static assets and routes API requests and audio WebSockets to Cloudflare Containers running the existing Python Gateway, Agent, and Celery worker images. Audio objects use Cloudflare R2's S3-compatible API. PostgreSQL 16 with `pgvector` and Redis remain external managed services; D1 is not a compatible replacement for this application's PostgreSQL schema.
+
+### Prerequisites
+
+- A Cloudflare account with Workers Paid and Containers enabled, plus Docker Desktop using Linux containers.
+- Node.js 22 or later.
+- A managed PostgreSQL 16 database with the `vector` extension and a publicly reachable TLS connection.
+- A managed Redis service with a TLS-enabled connection URL (`rediss://`).
+- An R2 bucket and R2 API token with read/write access to that bucket.
+- Deepgram and Gemini API keys. OpenAI is optional.
+
+### Deploy
+
+From the repository root:
+
+```bash
+cd cloudflare
+npm ci
+```
+
+Create `.env.production` in the `cloudflare/` directory with the following values. This file is git-ignored; do not commit it. Use a PostgreSQL URL with the `postgresql+asyncpg://` scheme and a Redis `rediss://` URL. The R2 endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
+
+```dotenv
+DATABASE_URL=postgresql+asyncpg://USER:PASSWORD@HOST:5432/DATABASE
+REDIS_URL=rediss://USER:PASSWORD@HOST:PORT/0
+R2_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=R2_ACCESS_KEY
+R2_SECRET_ACCESS_KEY=R2_SECRET_KEY
+R2_BUCKET_NAME=YOUR_BUCKET_NAME
+DEEPGRAM_API_KEY=YOUR_DEEPGRAM_API_KEY
+GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+```
+
+Optionally add `OPENAI_API_KEY` for OpenAI-backed embeddings or models. Deploy the Worker and its Container images:
+
+```bash
+npm run deploy
+```
+
+The scheduled Worker pings the Celery health endpoint once per minute. This keeps the queue consumer alive despite idle Container shutdown; it is not scale-to-zero and incurs ongoing Container resource usage. API Containers can sleep after five minutes of inactivity. Set up the database schema before sending requests; the Gateway currently creates its tables at startup.
+
+The Worker is not exposed on `workers.dev` by default. Before accessing the app, attach a custom domain to the Worker and protect it with Cloudflare Access. The app has no user or device authentication; do not expose it directly to the public internet.
+
+### Important production limitations
+
+- The application has no user authentication or authorization. Do not expose it publicly with sensitive data until application-level authentication is implemented. Cloudflare Access is appropriate for a private internal demo, but not a substitute for device/API authentication for public clients.
+- The database and Redis URLs must be reachable from Cloudflare Containers. Each Gateway, Agent, and worker container is configured with a PostgreSQL pool of up to five connections; confirm your provider permits at least 55 connections for the configured instance counts.
+- The Worker upload path allows at most 100 MiB, and the Gateway currently buffers recordings in memory. The WebSocket recording route also buffers a complete recording. For larger recordings, add direct presigned R2 uploads and multipart support.
+- Container deployment requires a running Docker-compatible engine. `wrangler deploy` builds and publishes the images; a Cloudflare Worker code deploy alone does not update container images.
+- Container instances are billed while active. Adjust the instance counts in `cloudflare/wrangler.jsonc` and monitor Cloudflare Containers usage before production traffic.

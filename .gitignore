@@ -29,6 +29,9 @@ MANIFEST
 
 # Virtual environments
 .env
+.env.production
+.dev.vars*
+cloudflare/worker-configuration.d.ts
 .venv
 env/
 venv/

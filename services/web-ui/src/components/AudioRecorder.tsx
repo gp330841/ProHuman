@@ -130,7 +130,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
 
       // Setup WebSocket connection to Gateway
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/audio/${newSession.id}`;
+      const wsUrl = `${protocol}//${window.location.host}/api/v1/audio/stream/${newSession.id}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
       ws.binaryType = 'arraybuffer';

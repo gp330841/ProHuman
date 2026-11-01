@@ -34,6 +34,7 @@ class S3StorageService:
             endpoint_url=self.endpoint_url,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
+            region_name="auto",
         )
 
     async def upload_chunk(self, session_id: str, chunk_index: int, data: bytes, content_type: str) -> str:
