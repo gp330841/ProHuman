@@ -4,7 +4,7 @@ services:
     container_name: prohuman-postgres
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -25,7 +25,7 @@ services:
     container_name: prohuman-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
@@ -43,8 +43,8 @@ services:
     container_name: prohuman-minio
     restart: unless-stopped
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     command: server /data --console-address ':9001'
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -60,12 +60,27 @@ services:
     networks:
       - prohuman-net
 
+  migrate:
+    build:
+      context: ..
+      dockerfile: services/gateway/Dockerfile
+    command: alembic -c packages/db/alembic/alembic.ini upgrade head
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-prohuman}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - prohuman-net
+
   gateway:
-    build: ../services/gateway
+    build:
+      context: ..
+      dockerfile: services/gateway/Dockerfile
     container_name: prohuman-gateway
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-prohuman}
       GATEWAY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-prohuman}
@@ -81,20 +96,19 @@ services:
       GATEWAY_S3_BUCKET_NAME: ${S3_BUCKET_NAME:-audio-recordings}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      PROHUMAN_CREDENTIALS: ${PROHUMAN_CREDENTIALS:-}
+      GATEWAY_DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
       GATEWAY_LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PYTHONPATH: /app
-    volumes:
-      - ../services/gateway/app:/app/app:ro
-      - ../packages:/app/packages:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/system/status"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
@@ -103,7 +117,9 @@ services:
       - prohuman-net
 
   worker-stt:
-    build: ../services/worker
+    build:
+      context: ..
+      dockerfile: services/worker/Dockerfile
     container_name: prohuman-worker-stt
     restart: unless-stopped
     command: celery -A app.celery_app worker -Q transcription -c 2 --loglevel=info
@@ -123,12 +139,9 @@ services:
       WORKER_DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
       DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
       PYTHONPATH: /app
-    volumes:
-      - ../services/worker/app:/app/app:ro
-      - ../packages:/app/packages:ro
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
@@ -137,7 +150,9 @@ services:
       - prohuman-net
 
   worker-embedding:
-    build: ../services/worker
+    build:
+      context: ..
+      dockerfile: services/worker/Dockerfile
     container_name: prohuman-worker-embedding
     restart: unless-stopped
     command: celery -A app.celery_app worker -Q embedding -c 4 --loglevel=info
@@ -157,19 +172,18 @@ services:
       WORKER_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       PYTHONPATH: /app
-    volumes:
-      - ../services/worker/app:/app/app:ro
-      - ../packages:/app/packages:ro
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
       - prohuman-net
 
   worker-features:
-    build: ../services/worker
+    build:
+      context: ..
+      dockerfile: services/worker/Dockerfile
     container_name: prohuman-worker-features
     restart: unless-stopped
     command: celery -A app.celery_app worker -Q features -c 2 --loglevel=info
@@ -192,23 +206,22 @@ services:
       WORKER_GEMINI_API_KEY: ${WORKER_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}
       WORKER_DEFAULT_LLM_MODEL: ${WORKER_DEFAULT_LLM_MODEL:-gemini-3.8-flash}
       PYTHONPATH: /app
-    volumes:
-      - ../services/worker/app:/app/app:ro
-      - ../packages:/app/packages:ro
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
       - prohuman-net
 
   agent:
-    build: ../services/agent
+    build:
+      context: ..
+      dockerfile: services/agent/Dockerfile
     container_name: prohuman-agent
     restart: unless-stopped
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-prohuman}
       AGENT_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-prohuman}
@@ -218,11 +231,9 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AGENT_GEMINI_API_KEY: ${AGENT_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}
       AGENT_DEFAULT_LLM_MODEL: ${AGENT_DEFAULT_LLM_MODEL:-gemini-3.8-flash}
+      PROHUMAN_CREDENTIALS: ${PROHUMAN_CREDENTIALS:-}
       AGENT_LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PYTHONPATH: /app
-    volumes:
-      - ../services/agent/app:/app/app:ro
-      - ../packages:/app/packages:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 10s
@@ -230,8 +241,8 @@ services:
       retries: 5
       start_period: 10s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -244,8 +255,8 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - gateway
-      - agent
+      gateway:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80/"]
       interval: 10s

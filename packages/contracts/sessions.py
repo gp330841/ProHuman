@@ -51,6 +51,8 @@ class SessionDetail(SessionResponse):
     transcript_segment_count: int = Field(default=0, description="Number of transcript segments")
     transcript_segments: list[dict[str, Any]] = Field(default_factory=list, description="List of segments")
     feature_results: dict[str, Any] = Field(default_factory=dict, description="Extracted AI features")
+    mom_version: int | None = None
+    pipeline_stages: dict[str, str] = Field(default_factory=dict)
     s3_key: str | None = Field(default=None, description="Storage key for the raw audio")
 
 class SessionListResponse(BaseModel):

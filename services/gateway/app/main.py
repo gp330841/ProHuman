@@ -1,17 +1,20 @@
 """Main entry point for gateway service."""
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import structlog
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import text
+from packages.db.engine import create_db_engine, get_db_context
 
 from app.api.v1.router import api_router
 from app.config import get_settings
+from app.services.task_dispatcher import publish_pending_jobs
 from app.middleware.error_handler import setup_error_handlers
 from app.middleware.rate_limit import RateLimitMiddleware
 
@@ -28,20 +31,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logging.basicConfig(level=settings.log_level)
     await logger.ainfo("Starting gateway service...")
     
-    engine = None
-    try:
-        from packages.db.engine import create_db_engine
-        from packages.db.base import Base
-        import packages.db.models  # noqa: F401
-        from sqlalchemy import text
-
-        engine = create_db_engine(settings.database_url)
-        async with engine.begin() as conn:
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-            await conn.run_sync(Base.metadata.create_all)
-        await logger.ainfo("Database tables & pgvector initialized successfully.")
-    except Exception as e:
-        await logger.aerror("Database initialization notice", error=str(e))
+    engine = create_db_engine(settings.database_url)
 
     try:
         from app.services.storage import S3StorageService
@@ -56,10 +46,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         await logger.aerror("S3 bucket initialization notice", error=str(e))
 
-    yield
-    
-    await logger.ainfo("Shutting down gateway service...")
-    if engine:
+    publisher = asyncio.create_task(publish_pending_jobs(settings.redis_url))
+    try:
+        yield
+    finally:
+        publisher.cancel()
+        with suppress(asyncio.CancelledError):
+            await publisher
         await engine.dispose()
     # Clean up resources
 
@@ -95,6 +88,15 @@ def create_app() -> FastAPI:
     async def health_check() -> dict[str, str]:
         """Health check endpoint."""
         return {"status": "ok"}
+
+    @app.get("/ready")
+    async def readiness_check() -> dict[str, str]:
+        try:
+            async with get_db_context() as db:
+                await db.execute(text("SELECT id FROM pipeline_jobs LIMIT 1"))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Database schema unavailable") from exc
+        return {"status": "ready"}
 
     return app
 

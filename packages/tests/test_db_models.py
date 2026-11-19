@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import uuid
-from packages.db.models.session import SessionModel, SessionStatusEnum
-from packages.db.models.transcript import TranscriptSegmentModel
+from packages.db.models.session import Session, SessionStatusEnum
+from packages.db.models.transcript import TranscriptSegment
 from packages.db.models.feature_result import FeatureResultModel
 from packages.db.models.audio_chunk import AudioChunk
 
@@ -11,21 +11,20 @@ from packages.db.models.audio_chunk import AudioChunk
 class TestDatabaseModels:
     def test_session_model_creation(self):
         session_id = uuid.uuid4()
-        session = SessionModel(
+        session = Session(
             id=session_id,
             device_id="hardware-device-01",
             status=SessionStatusEnum.CREATED,
-            language="hi",
-            extra_metadata={"client": "web"},
+            metadata_={"client": "web", "language": "hi"},
         )
         assert session.id == session_id
         assert session.device_id == "hardware-device-01"
         assert session.status == SessionStatusEnum.CREATED
-        assert session.language == "hi"
+        assert session.metadata_["language"] == "hi"
 
     def test_transcript_segment_model_creation(self):
         session_id = uuid.uuid4()
-        segment = TranscriptSegmentModel(
+        segment = TranscriptSegment(
             session_id=session_id,
             segment_index=0,
             speaker_label="Speaker 0",

@@ -7,24 +7,16 @@ import {
   Bot,
   Sliders,
   Zap,
-  Trash2,
 } from 'lucide-react';
-import { fetchSystemStatus, flushTestData, queryAgent, SystemStatus } from '../api/client';
-import { useUser } from '../context/UserContext';
+import { fetchSystemStatus, queryAgent, SystemStatus } from '../api/client';
 
-interface Props {
-  onDataFlushed?: () => void;
-}
-
-export const SystemController: React.FC<Props> = ({ onDataFlushed }) => {
-  const { activeUser } = useUser();
+export const SystemController: React.FC = () => {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [testAgentLoading, setTestAgentLoading] = useState(false);
   const [testAgentResult, setTestAgentResult] = useState<string | null>(null);
   const [hardwareMode, setHardwareMode] = useState<'neo1' | 'desk' | 'mobile'>('neo1');
   const [autoMomEnabled, setAutoMomEnabled] = useState(true);
-  const [isFlushing, setIsFlushing] = useState(false);
 
   const loadStatus = async () => {
     setLoading(true);
@@ -49,7 +41,7 @@ export const SystemController: React.FC<Props> = ({ onDataFlushed }) => {
     setTestAgentResult(null);
     try {
       const start = Date.now();
-      const res = await queryAgent('Quick system health check and capabilities summary', activeUser.id);
+      const res = await queryAgent('Quick system health check and capabilities summary');
       const elapsed = Date.now() - start;
       setTestAgentResult(`Agent OK (${elapsed}ms): ${res.response.slice(0, 120)}...`);
     } catch (err: any) {
@@ -59,21 +51,6 @@ export const SystemController: React.FC<Props> = ({ onDataFlushed }) => {
     }
   };
 
-  const handleFlushData = async () => {
-    if (!window.confirm('Are you sure you want to clear all recorded demo sessions and transcripts from PostgreSQL? This action cannot be undone.')) {
-      return;
-    }
-    setIsFlushing(true);
-    try {
-      await flushTestData();
-      await loadStatus();
-      onDataFlushed?.();
-    } catch (err: any) {
-      alert(`Flush failed: ${err.message}`);
-    } finally {
-      setIsFlushing(false);
-    }
-  };
 
   return (
     <section className="glass-panel overflow-hidden border border-slate-800 rounded-2xl shadow-xl">
@@ -270,16 +247,6 @@ export const SystemController: React.FC<Props> = ({ onDataFlushed }) => {
             </button>
           </div>
 
-          {/* Flush Demo Data Button */}
-          <button
-            onClick={handleFlushData}
-            disabled={isFlushing}
-            className="flex items-center gap-1 px-2.5 py-1 text-[11px] text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded-lg transition"
-            title="Clean demo sessions from database"
-          >
-            <Trash2 className="w-3 h-3" />
-            {isFlushing ? 'Clearing...' : 'Clear Test Data'}
-          </button>
         </div>
       </div>
     </section>

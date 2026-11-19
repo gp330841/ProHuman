@@ -24,7 +24,6 @@ class AudioChunk(Base, TimestampMixin):
     __tablename__ = "audio_chunks"
     __table_args__ = (
         UniqueConstraint("session_id", "chunk_index", name="uq_chunk_session_index"),
-        UniqueConstraint("session_id", "checksum", name="uq_chunk_session_checksum"),
     )
 
     id: Mapped[uuid_pk]

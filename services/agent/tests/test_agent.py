@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from app.config import AgentSettings, get_settings
+from app.config import AgentSettings
 from app.runtime.engine import (
     AgentConfig,
     AgentState,
@@ -29,9 +29,9 @@ async def dummy_executor(input_data: DummyInput) -> DummyOutput:
 
 class TestAgentConfiguration:
     def test_agent_settings_defaults(self):
-        settings = get_settings()
+        settings = AgentSettings(_env_file=None)
         assert "prohuman" in settings.database_url
-        assert settings.default_llm_model == "gpt-4o"
+        assert settings.default_llm_model == "gemini-3.8-flash"
         assert settings.max_total_hops == 15
         assert settings.token_budget_limit == 200_000
 
@@ -109,3 +109,20 @@ class TestToolRegistry:
     def test_nonexistent_tool(self):
         registry = ToolRegistry()
         assert registry.get("non_existent") is None
+
+
+def test_only_retrieved_transcript_references_are_returned():
+    from uuid import uuid4
+
+    state = AgentState()
+    segment_id = uuid4()
+    session_id = uuid4()
+    state.remember_evidence("search_conversations", {"results": [{
+        "segment_id": segment_id, "session_id": session_id, "start_time": 10, "end_time": 12,
+    }]})
+    answer, sources = state.cited_answer(
+        f"Supported [source:{segment_id}] and invalid [source:{uuid4()}]"
+    )
+    assert "[1]" in answer
+    assert "[source:" not in answer
+    assert [source.session_id for source in sources] == [session_id]

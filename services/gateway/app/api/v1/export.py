@@ -61,7 +61,7 @@ async def export_mom(
         raise HTTPException(status_code=404, detail="Session not found")
         
     mom_data = None
-    for feat in session.feature_results:
+    for feat in sorted(session.feature_results, key=lambda result: result.version, reverse=True):
         if feat.feature_name.lower() == "mom":
             mom_data = feat.data
             break
@@ -100,7 +100,7 @@ async def export_mom(
                     if isinstance(ai, dict):
                         assignee = ai.get('assignee', 'Unassigned')
                         priority = ai.get('priority', 'Normal')
-                        task = ai.get('task', str(ai))
+                        task = ai.get('description', str(ai))
                         md_lines.append(f"- [ ] **{assignee}** ({priority}): {task}")
                     else:
                         md_lines.append(f"- [ ] {ai}")
@@ -135,7 +135,7 @@ async def export_full(
     md_lines = [f"# Full Export for Session {session_id}\n"]
     
     mom_data = None
-    for feat in session.feature_results:
+    for feat in sorted(session.feature_results, key=lambda result: result.version, reverse=True):
         if feat.feature_name.lower() == "mom":
             mom_data = feat.data
             break
@@ -151,7 +151,7 @@ async def export_full(
                 if isinstance(ai, dict):
                     assignee = ai.get('assignee', 'Unassigned')
                     priority = ai.get('priority', 'Normal')
-                    task = ai.get('task', str(ai))
+                    task = ai.get('description', str(ai))
                     md_lines.append(f"- [ ] **{assignee}** ({priority}): {task}")
                 else:
                     md_lines.append(f"- [ ] {ai}")

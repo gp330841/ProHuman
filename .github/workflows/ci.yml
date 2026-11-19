@@ -9,7 +9,9 @@ on:
       - 'services/gateway/**'
       - 'services/worker/**'
       - 'services/agent/**'
+      - 'services/web-ui/**'
       - 'infra/**'
+      - 'simulation/release_smoke*.py'
       - '.github/workflows/ci.yml'
       - 'pyproject.toml'
   pull_request:
@@ -20,7 +22,9 @@ on:
       - 'services/gateway/**'
       - 'services/worker/**'
       - 'services/agent/**'
+      - 'services/web-ui/**'
       - 'infra/**'
+      - 'simulation/release_smoke*.py'
       - '.github/workflows/ci.yml'
       - 'pyproject.toml'
 
@@ -215,7 +219,7 @@ jobs:
           pip install -e ./services/worker
 
       - name: Run Worker Tests
-        run: pytest services/worker/ -v
+        run: pytest -o pythonpath=. services/worker/ -v
 
   test-agent:
     name: Test Agent Service
@@ -267,7 +271,68 @@ jobs:
           pip install -e ./services/agent
 
       - name: Run Agent Tests
-        run: pytest services/agent/ -v
+        run: pytest -o pythonpath=. services/agent/ -v
+
+  web-ui:
+    name: Build Web UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/web-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: services/web-ui/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  release-smoke:
+    name: Browser to recording and insights
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ./services/worker playwright
+      - run: playwright install --with-deps chromium
+      - name: Set up separate test workspaces
+        run: CONFIGURE_RELEASE_SMOKE=1 python -m simulation.release_smoke
+      - name: Start data services, migrate an empty database, and start the web app
+        run: docker compose -f infra/docker-compose.yml up -d --build --wait --wait-timeout 120 postgres redis minio gateway web-ui
+      - name: Verify upgrade of a pre-existing database
+        run: |
+          compose() { docker compose -f infra/docker-compose.yml "$@"; }
+          compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -c 'CREATE DATABASE prohuman_legacy'
+          legacy_url=postgresql+asyncpg://postgres:postgres@postgres:5432/prohuman_legacy
+          compose run --rm -e DATABASE_URL="$legacy_url" migrate alembic -c packages/db/alembic/alembic.ini upgrade 0001_recording_baseline
+          compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d prohuman_legacy <<'SQL'
+          DROP TABLE alembic_version;
+          INSERT INTO sessions (id, device_id, status) VALUES ('00000000-0000-0000-0000-000000000001', 'legacy-device', 'TRANSCRIBED');
+          INSERT INTO transcript_segments (session_id, segment_index, speaker_label, text, start_time, end_time)
+            VALUES ('00000000-0000-0000-0000-000000000001', 0, 'speaker_0', 'legacy transcript', 0, 1);
+          SQL
+          compose run --rm -e DATABASE_URL="$legacy_url" migrate alembic -c packages/db/alembic/alembic.ini upgrade head
+          test "$(compose exec -T postgres psql -tA -v ON_ERROR_STOP=1 -U postgres -d prohuman_legacy -c "SELECT count(*) FROM sessions JOIN transcript_segments ON sessions.id = transcript_segments.session_id WHERE workspace_id IS NULL AND text = 'legacy transcript'")" = 1
+      - name: Verify recording recovery and workspace permissions
+        env:
+          PYTHONPATH: .:services/worker
+          WORKER_S3_ENDPOINT_URL: http://127.0.0.1:9000
+          WORKER_DEEPGRAM_API_KEY: smoke-placeholder
+        run: |
+          python -m simulation.release_smoke_worker >"$RUNNER_TEMP/prohuman-worker.log" 2>&1 &
+          worker_pid=$!
+          trap 'kill "$worker_pid" 2>/dev/null || true' EXIT
+          python -m simulation.release_smoke
+      - name: Show service logs
+        if: failure()
+        run: |
+          docker compose -f infra/docker-compose.yml logs --tail 80
+          if [ -f "$RUNNER_TEMP/prohuman-worker.log" ]; then tail -80 "$RUNNER_TEMP/prohuman-worker.log"; fi
 
   build:
     name: Build Docker Images
@@ -282,7 +347,7 @@ jobs:
       - name: Build Gateway Image
         uses: docker/build-push-action@v5
         with:
-          context: ./services/gateway
+          context: .
           file: ./services/gateway/Dockerfile
           push: false
           tags: prohuman/gateway:ci
@@ -290,7 +355,7 @@ jobs:
       - name: Build Worker Image
         uses: docker/build-push-action@v5
         with:
-          context: ./services/worker
+          context: .
           file: ./services/worker/Dockerfile
           push: false
           tags: prohuman/worker:ci
@@ -298,7 +363,7 @@ jobs:
       - name: Build Agent Image
         uses: docker/build-push-action@v5
         with:
-          context: ./services/agent
+          context: .
           file: ./services/agent/Dockerfile
           push: false
           tags: prohuman/agent:ci

@@ -6,6 +6,9 @@ export interface Session {
   updated_at: string;
   audio_format?: string;
   duration_seconds?: number;
+  pipeline_stages?: Record<string, string>;
+  s3_key?: string;
+  mom_version?: number;
 }
 
 export interface TranscriptSegment {
@@ -22,7 +25,15 @@ export interface TranscriptSegment {
   text_rank?: number;
 }
 
+export interface TranscriptEvidence {
+  session_id: string;
+  segment_id: string;
+  start_time: number;
+  end_time: number;
+}
+
 export interface ActionItem {
+  evidence?: TranscriptEvidence;
   description: string;
   assignee?: string;
   deadline?: string;
@@ -32,6 +43,7 @@ export interface ActionItem {
 }
 
 export interface Decision {
+  evidence?: TranscriptEvidence;
   description: string;
   made_by?: string;
   confidence?: number;
@@ -68,6 +80,39 @@ export interface SearchResult {
 }
 
 export const API_BASE = '/api/v1';
+
+const tokenKey = 'prohuman_access_token';
+
+export interface WorkspaceIdentity {
+  user_id: string;
+  workspace_id: string;
+  role: string;
+}
+
+export function getAccessToken(): string {
+  return sessionStorage.getItem(tokenKey) ?? '';
+}
+
+export function setAccessToken(token: string): void {
+  if (token) sessionStorage.setItem(tokenKey, token);
+  else sessionStorage.removeItem(tokenKey);
+}
+
+function authorizedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(options.headers);
+  const token = getAccessToken();
+  if (token) headers.set('Authorization', 'Bearer ' + token);
+  return fetch(url, { ...options, headers });
+}
+
+export async function fetchIdentity(token: string): Promise<WorkspaceIdentity> {
+  const response = await fetch(API_BASE + '/me', {
+    headers: { Authorization: 'Bearer ' + token },
+    signal: AbortSignal.timeout(10000),
+  });
+  await ensureOk(response);
+  return response.json();
+}
 
 async function ensureOk(response: Response): Promise<void> {
   if (response.ok) return;
@@ -108,20 +153,7 @@ export interface SystemStatus {
  * @returns A promise resolving to the system status object.
  */
 export async function fetchSystemStatus(): Promise<SystemStatus> {
-  const response = await fetch(`${API_BASE}/system/status`, { signal: AbortSignal.timeout(5000) });
-  await ensureOk(response);
-  return response.json();
-}
-
-/**
- * Flushes all test data from the system databases.
- * @returns A promise resolving to a success message.
- */
-export async function flushTestData(): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE}/system/flush-test-data`, {
-    method: 'POST',
-    signal: AbortSignal.timeout(10000),
-  });
+  const response = await authorizedFetch(`${API_BASE}/system/status`, { signal: AbortSignal.timeout(5000) });
   await ensureOk(response);
   return response.json();
 }
@@ -133,7 +165,7 @@ export async function flushTestData(): Promise<{ message: string }> {
  */
 export async function fetchSessions(userId?: string): Promise<Session[]> {
   const url = userId ? `${API_BASE}/sessions?user_id=${encodeURIComponent(userId)}` : `${API_BASE}/sessions`;
-  const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  const response = await authorizedFetch(url, { signal: AbortSignal.timeout(10000) });
   await ensureOk(response);
   const data: { sessions: Session[] } = await response.json();
   return data.sessions;
@@ -149,7 +181,7 @@ export async function fetchSessionDetails(sessionId: string): Promise<{
   segments: TranscriptSegment[];
   mom: MOMData | null;
 }> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}`, { signal: AbortSignal.timeout(10000) });
+  const response = await authorizedFetch(`${API_BASE}/sessions/${sessionId}`, { signal: AbortSignal.timeout(10000) });
   await ensureOk(response);
   const data = await response.json();
   return {
@@ -171,7 +203,7 @@ export async function createSession(
   language: string = 'auto',
   metadata: Record<string, any> = {}
 ): Promise<Session> {
-  const response = await fetch(`${API_BASE}/sessions`, {
+  const response = await authorizedFetch(`${API_BASE}/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -199,7 +231,7 @@ export async function uploadAudioFile(
 ): Promise<{ session_id: string; status: string }> {
   const formData = new FormData();
   formData.append('file', file);
-  const response = await fetch(`${API_BASE}/audio/${sessionId}/upload`, {
+  const response = await authorizedFetch(`${API_BASE}/audio/${sessionId}/upload`, {
     method: 'POST',
     body: formData,
     signal: AbortSignal.timeout(120000),
@@ -218,7 +250,7 @@ export async function runHybridSearch(
   query: string,
   mode: 'HYBRID' | 'SEMANTIC' | 'LEXICAL' = 'HYBRID',
 ): Promise<SearchResult[]> {
-  const response = await fetch(`${API_BASE}/search`, {
+  const response = await authorizedFetch(`${API_BASE}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -240,7 +272,7 @@ export async function runHybridSearch(
  * @returns A promise resolving when the request succeeds.
  */
 export async function generateMom(sessionId: string, force = false): Promise<void> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/features`, {
+  const response = await authorizedFetch(`${API_BASE}/sessions/${sessionId}/features`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ feature_names: ['mom'], force }),
@@ -250,6 +282,7 @@ export async function generateMom(sessionId: string, force = false): Promise<voi
 }
 
 export interface AgentResponse {
+  citations: TranscriptEvidence[];
   response: string;
   query_id: string;
   tool_calls_count: number;
@@ -260,16 +293,14 @@ export interface AgentResponse {
 /**
  * Submits a query to the AI agent.
  * @param query - The user's query text.
- * @param userId - The user's identifier.
  * @returns A promise resolving to the agent's response.
  */
-export async function queryAgent(query: string, userId: string = 'user-01'): Promise<AgentResponse> {
-  const response = await fetch(`${API_BASE}/agent/query`, {
+export async function queryAgent(query: string): Promise<AgentResponse> {
+  const response = await authorizedFetch(`${API_BASE}/agent/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       query,
-      user_id: userId,
     }),
     signal: AbortSignal.timeout(120000),
   });
@@ -290,7 +321,7 @@ export async function exportTranscript(
   sessionId: string,
   format: 'markdown' | 'json' = 'markdown',
 ): Promise<string> {
-  const response = await fetch(`${API_BASE}/export/${sessionId}/transcript?format=${format}`, {
+  const response = await authorizedFetch(`${API_BASE}/export/${sessionId}/transcript?format=${format}`, {
     signal: AbortSignal.timeout(30000),
   });
   await ensureOk(response);
@@ -307,7 +338,7 @@ export async function exportMom(
   sessionId: string,
   format: 'markdown' | 'json' = 'markdown',
 ): Promise<string> {
-  const response = await fetch(`${API_BASE}/export/${sessionId}/mom?format=${format}`, {
+  const response = await authorizedFetch(`${API_BASE}/export/${sessionId}/mom?format=${format}`, {
     signal: AbortSignal.timeout(30000),
   });
   await ensureOk(response);
@@ -324,7 +355,7 @@ export async function exportFullSession(
   sessionId: string,
   format: 'markdown' | 'json' = 'markdown',
 ): Promise<string> {
-  const response = await fetch(`${API_BASE}/export/${sessionId}/full?format=${format}`, {
+  const response = await authorizedFetch(`${API_BASE}/export/${sessionId}/full?format=${format}`, {
     signal: AbortSignal.timeout(30000),
   });
   await ensureOk(response);
@@ -337,7 +368,7 @@ export async function exportFullSession(
  * @returns A promise resolving when the deletion succeeds.
  */
 export async function deleteSession(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}`, {
+  const response = await authorizedFetch(`${API_BASE}/sessions/${sessionId}`, {
     method: 'DELETE',
     signal: AbortSignal.timeout(10000),
   });
@@ -356,7 +387,7 @@ export interface Language {
  * @returns A promise resolving to languages and default.
  */
 export async function fetchLanguages(): Promise<{ languages: Language[]; default: string }> {
-  const response = await fetch(`${API_BASE}/languages`, {
+  const response = await authorizedFetch(`${API_BASE}/languages`, {
     signal: AbortSignal.timeout(5000),
   });
   await ensureOk(response);
@@ -379,11 +410,40 @@ export async function submitSessionTranscript(
     confidence?: number;
   }>,
 ): Promise<void> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/transcript`, {
+  const response = await authorizedFetch(`${API_BASE}/sessions/${sessionId}/transcript`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ segments }),
     signal: AbortSignal.timeout(10000),
   });
   await ensureOk(response);
+}
+
+export async function fetchRecording(sessionId: string, signal: AbortSignal): Promise<Blob> {
+  const response = await authorizedFetch(API_BASE + '/audio/' + sessionId + '/playback', { signal });
+  await ensureOk(response);
+  return response.blob();
+}
+
+export async function retryStage(sessionId: string, stage: string): Promise<void> {
+  const response = await authorizedFetch(API_BASE + '/sessions/' + sessionId + '/stages/' + stage + '/retry', {
+    method: 'POST',
+    signal: AbortSignal.timeout(10000),
+  });
+  await ensureOk(response);
+}
+
+export async function reviewActionItem(
+  sessionId: string,
+  index: number,
+  review: { version: number; description: string; assignee: string | null; deadline: string | null },
+): Promise<{ mom: MOMData; version: number }> {
+  const response = await authorizedFetch(API_BASE + '/sessions/' + sessionId + '/mom/action-items/' + index, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(review),
+    signal: AbortSignal.timeout(10000),
+  });
+  await ensureOk(response);
+  return response.json();
 }

@@ -1,6 +1,9 @@
 """Tests for shared packages contracts."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
@@ -47,17 +50,15 @@ from packages.contracts.transcription import (
 
 class TestAudioContracts:
     def test_audio_format_enum(self):
-        assert AudioFormat.OPUS == "opus"
-        assert AudioFormat.WAV == "wav"
-        assert AudioFormat.PCM == "pcm"
-        assert AudioFormat.WEBM == "webm"
+        assert AudioFormat.OPUS == "OPUS"
+        assert AudioFormat.WAV == "WAV"
+        assert AudioFormat.PCM16 == "PCM16"
 
     def test_audio_session_config_defaults(self):
-        config = AudioSessionConfig()
+        config = AudioSessionConfig(format=AudioFormat.OPUS)
         assert config.format == AudioFormat.OPUS
         assert config.sample_rate == 16000
         assert config.channels == 1
-        assert config.language == "hi"
 
     def test_audio_session_config_custom(self):
         config = AudioSessionConfig(
@@ -72,14 +73,12 @@ class TestAudioContracts:
 
     def test_audio_chunk_meta(self):
         meta = AudioChunkMeta(
-            session_id="test-session-123",
             chunk_index=0,
             size_bytes=1024,
             duration_ms=250.0,
             s3_key="audio/session-123/chunk-0.opus",
             checksum="abc123sha256",
         )
-        assert meta.session_id == "test-session-123"
         assert meta.chunk_index == 0
         assert meta.size_bytes == 1024
 
@@ -94,6 +93,7 @@ class TestSessionContracts:
     def test_session_create(self):
         create_req = SessionCreate(
             device_id="hardware-mic-1",
+            audio_format=AudioFormat.OPUS,
             language="hi",
             metadata={"user_name": "Test User"},
         )
@@ -102,13 +102,15 @@ class TestSessionContracts:
         assert create_req.metadata["user_name"] == "Test User"
 
     def test_session_response_validation(self):
+        session_id = uuid4()
         resp = SessionResponse(
-            id="session-uuid-1",
+            id=session_id,
             device_id="device-01",
             status=SessionStatus.RECORDING,
-            created_at="2026-10-02T10:00:00Z",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
         )
-        assert resp.id == "session-uuid-1"
+        assert resp.id == session_id
         assert resp.status == SessionStatus.RECORDING
 
 
@@ -132,8 +134,9 @@ class TestTranscriptionContracts:
         assert "meeting" in seg.text
 
     def test_transcription_result(self):
+        session_id = uuid4()
         res = TranscriptionResult(
-            session_id="sess-1",
+            session_id=session_id,
             segments=[
                 TranscriptSegment(
                     segment_index=0,
@@ -144,9 +147,11 @@ class TestTranscriptionContracts:
                 )
             ],
             duration_seconds=1.0,
-            detected_language="hi",
+            language="hi",
+            speaker_count=1,
+            adapter_used="test",
         )
-        assert res.session_id == "sess-1"
+        assert res.session_id == session_id
         assert len(res.segments) == 1
 
 
@@ -164,16 +169,17 @@ class TestFeatureContracts:
     def test_mom_result(self):
         mom = MOMResult(
             title="Q3 Strategy Review",
+            date=datetime.now(timezone.utc),
             executive_summary="Team reviewed progress and agreed on budget.",
             attendees=["Yogeshwar", "Amit"],
             action_items=[
-                ActionItem(description="Review slides", assignee="Amit")
+                ActionItem(description="Review slides", assignee="Amit", priority="medium")
             ],
             decisions=[
                 Decision(description="Approve Q3 budget", made_by="Yogeshwar")
             ],
             agenda_items=[
-                AgendaItem(topic="Budget Review", duration_seconds=600)
+                AgendaItem(topic="Budget Review", summary="Budget approved", duration_seconds=600, speakers_involved=["Amit"])
             ],
             follow_ups=[
                 FollowUp(description="Send updated spreadsheet", responsible_party="Amit")
@@ -189,18 +195,19 @@ class TestFeatureContracts:
     def test_summary_result(self):
         summary = SummaryResult(
             executive_summary="Short meeting overview.",
-            key_points=["Point 1", "Point 2"],
-            sentiment="positive",
+            title="Planning meeting",
+            key_topics=["Budget", "Timeline"],
+            participant_count=2,
         )
-        assert len(summary.key_points) == 2
-        assert summary.sentiment == "positive"
+        assert len(summary.key_topics) == 2
+        assert summary.participant_count == 2
 
 
 class TestSearchContracts:
     def test_search_mode_values(self):
-        assert SearchMode.HYBRID == "hybrid"
-        assert SearchMode.SEMANTIC == "semantic"
-        assert SearchMode.LEXICAL == "lexical"
+        assert SearchMode.HYBRID == "HYBRID"
+        assert SearchMode.SEMANTIC == "SEMANTIC"
+        assert SearchMode.LEXICAL == "LEXICAL"
 
     def test_search_request_defaults(self):
         req = SearchRequest(query="budget discussions")
@@ -210,8 +217,9 @@ class TestSearchContracts:
 
     def test_search_response(self):
         item = SearchResultItem(
-            segment_id="seg-1",
-            session_id="sess-1",
+            segment_id=uuid4(),
+            session_id=uuid4(),
+            session_date=datetime.now(timezone.utc),
             speaker_label="Speaker 1",
             text="The budget is approved",
             start_time=10.0,
@@ -219,12 +227,12 @@ class TestSearchContracts:
             rrf_score=0.985,
         )
         resp = SearchResponse(
-            query="budget",
-            total_hits=1,
-            search_mode=SearchMode.HYBRID,
+            total_count=1,
+            query_embedding_model="test",
+            search_mode_used=SearchMode.HYBRID,
             results=[item],
         )
-        assert resp.total_hits == 1
+        assert resp.total_count == 1
         assert resp.results[0].rrf_score == 0.985
 
 

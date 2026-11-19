@@ -8,14 +8,24 @@ from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from .base import BaseRepository
+from ..models.session import Session
 from ..models.transcript import TranscriptSegment
 
 class TranscriptRepository(BaseRepository[TranscriptSegment]):
     """Repository for querying and managing transcript segments, including vector search."""
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, workspace_id: UUID | None = None):
         super().__init__(session, TranscriptSegment)
+        self.workspace_id = workspace_id
 
-    async def get_by_session(self, session_id: UUID, order_by_index: bool = True) -> list[TranscriptSegment]:
+    def scoped_segments(self):
+        stmt = select(TranscriptSegment)
+        if self.workspace_id is not None:
+            stmt = stmt.join(Session).where(Session.workspace_id == self.workspace_id)
+        return stmt
+
+    async def get_by_session(
+        self, session_id: UUID, order_by_index: bool = True, *, limit: int | None = None
+    ) -> list[TranscriptSegment]:
         """
         Get all transcript segments for a session.
         
@@ -23,9 +33,11 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
             session_id: The session UUID.
             order_by_index: Whether to order by segment index.
         """
-        stmt = select(TranscriptSegment).filter_by(session_id=session_id)
+        stmt = self.scoped_segments().where(TranscriptSegment.session_id == session_id)
         if order_by_index:
             stmt = stmt.order_by(TranscriptSegment.segment_index)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -68,6 +80,10 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
             WHERE embedding IS NOT NULL
               AND :search_mode != 'LEXICAL'
               AND (:session_ids_len = 0 OR session_id = ANY(CAST(:session_ids AS uuid[])))
+              AND (CAST(:workspace_id AS uuid) IS NULL OR EXISTS (
+                  SELECT 1 FROM sessions s
+                  WHERE s.id = transcript_segments.session_id AND s.workspace_id = CAST(:workspace_id AS uuid)
+              ))
               AND (CAST(:time_start AS timestamptz) IS NULL OR created_at >= CAST(:time_start AS timestamptz))
               AND (CAST(:time_end AS timestamptz) IS NULL OR created_at <= CAST(:time_end AS timestamptz))
             ORDER BY embedding <=> CAST(:query_embedding AS vector)
@@ -82,6 +98,10 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
             WHERE :search_mode != 'SEMANTIC'
               AND (search_vector @@ websearch_to_tsquery('english', :query_text) OR text ILIKE '%' || :query_text || '%')
               AND (:session_ids_len = 0 OR session_id = ANY(CAST(:session_ids AS uuid[])))
+              AND (CAST(:workspace_id AS uuid) IS NULL OR EXISTS (
+                  SELECT 1 FROM sessions s
+                  WHERE s.id = transcript_segments.session_id AND s.workspace_id = CAST(:workspace_id AS uuid)
+              ))
               AND (CAST(:time_start AS timestamptz) IS NULL OR created_at >= CAST(:time_start AS timestamptz))
               AND (CAST(:time_end AS timestamptz) IS NULL OR created_at <= CAST(:time_end AS timestamptz))
             ORDER BY (CASE WHEN search_vector @@ websearch_to_tsquery('english', :query_text) THEN ts_rank_cd(search_vector, websearch_to_tsquery('english', :query_text)) ELSE 0.05 END) DESC
@@ -114,6 +134,7 @@ class TranscriptRepository(BaseRepository[TranscriptSegment]):
             "limit": limit,
             "offset": offset,
             "rrf_k": rrf_k,
+            "workspace_id": self.workspace_id,
             "session_ids": session_ids_arr,
             "session_ids_len": len(session_ids_arr),
             "time_start": time_range_start,

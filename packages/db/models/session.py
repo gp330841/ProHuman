@@ -42,6 +42,8 @@ class Session(Base, TimestampMixin):
     __tablename__ = "sessions"
 
     id: Mapped[uuid_pk]
+    workspace_id: Mapped[UUID | None] = mapped_column(index=True)
+    owner_id: Mapped[str | None] = mapped_column(String(255))
     device_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     status: Mapped[SessionStatusEnum] = mapped_column(default=SessionStatusEnum.CREATED, index=True)
     duration_seconds: Mapped[float | None]

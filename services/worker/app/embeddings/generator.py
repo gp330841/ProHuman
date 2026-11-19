@@ -1,49 +1,28 @@
-"""Module for generator.py."""
-from __future__ import annotations
+"""Generate and validate embeddings before writing them to the transcript."""
 
-import structlog
+from uuid import UUID
 
-from packages.db.engine import get_db_context
-from packages.db.repositories.transcript_repo import TranscriptRepository
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.llm.client import LLMClient
+from packages.db.models.transcript import EMBEDDING_DIM
+from packages.db.repositories.transcript_repo import TranscriptRepository
 
-logger = structlog.get_logger(__name__)
 
 class EmbeddingGenerator:
-    """Class documentation."""
-    def __init__(self, llm_client: LLMClient, batch_size: int = 32):
-        """Method documentation."""
+    def __init__(self, llm_client: LLMClient):
         self.llm_client = llm_client
-        self.batch_size = batch_size
 
-    async def generate_for_session(self, session_id: str) -> int:
-        """Method documentation."""
-        async with get_db_context() as db_session:
-            repo = TranscriptRepository(db_session)
-            
-            segments = await repo.get_by_session(session_id)
-            if not segments:
-                logger.info("no_segments_found_for_embedding", session_id=session_id)
-                return 0
-            
-            # Filter segments that don't have embeddings yet
-            segments_to_update = [seg for seg in segments if seg.embedding is None]
-            if not segments_to_update:
-                logger.info("all_segments_already_embedded", session_id=session_id)
-                return 0
-
-            texts = [seg.text for seg in segments_to_update]
-            embeddings = await self.llm_client.generate_embeddings(texts)
-            
-            for seg, emb in zip(segments_to_update, embeddings):
-                seg.embedding = emb
-                # if search_vector logic needs to be updated here, update it
-                # For PostgreSQL, typically it's handled via trigger, but can be set if needed
-            
-            # Since SQLAlchemy tracks changes to the objects if they are attached to the session,
-            # committing the session will update them in the DB.
-            await db_session.commit()
-            
-            count = len(segments_to_update)
-            logger.info("embeddings_generated_and_saved", session_id=session_id, count=count)
-            return count
+    async def generate_for_session(self, db: AsyncSession, session_id: UUID) -> int:
+        segments = await TranscriptRepository(db).get_by_session(session_id)
+        pending = [segment for segment in segments if segment.embedding is None]
+        if not pending:
+            return 0
+        vectors = await self.llm_client.generate_embeddings([segment.text for segment in pending])
+        if len(vectors) != len(pending) or any(
+            len(vector) != EMBEDDING_DIM or not any(vector) for vector in vectors
+        ):
+            raise ValueError("Embedding provider returned invalid results")
+        for segment, vector in zip(pending, vectors, strict=True):
+            segment.embedding = vector
+        return len(pending)

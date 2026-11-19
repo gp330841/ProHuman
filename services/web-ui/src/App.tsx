@@ -8,7 +8,6 @@ import {
   RefreshCw,
   Clock,
   ArrowRight,
-  Trash2,
   Sun,
   Moon,
   Menu,
@@ -30,10 +29,10 @@ import {
   fetchSessions,
   fetchSessionDetails,
   generateMom,
+  retryStage,
   Session,
   TranscriptSegment,
   MOMData,
-  flushTestData
 } from './api/client';
 
 export default function App() {
@@ -43,6 +42,7 @@ export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [loadedDetailsId, setLoadedDetailsId] = useState<string | null>(null);
   const [mom, setMom] = useState<MOMData | null>(null);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
@@ -54,6 +54,18 @@ export default function App() {
   const momSnapshotRef = useRef<string | null>(null);
   const momTimeoutRef = useRef<number | undefined>(undefined);
   const [refreshCount, setRefreshCount] = useState(0);
+
+  const selectedSession = sessions.find((session) => session.id === selectedSessionId);
+
+  async function handleRetryStage(stage: string) {
+    if (!selectedSessionId) return;
+    try {
+      await retryStage(selectedSessionId, stage);
+      setRefreshCount((current) => current + 1);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Could not retry stage');
+    }
+  }
 
   const tabConfig = [
     {
@@ -87,7 +99,10 @@ export default function App() {
     setIsLoadingSessions(true);
     try {
       const data = await fetchSessions(filterByUserOnly ? activeUser.id : undefined);
-      setSessions(data);
+      setSessions((current) => data.map((session) => {
+        const existing = current.find((item) => item.id === session.id);
+        return existing ? { ...existing, ...session } : session;
+      }));
       setGatewayConnected(true);
       setApiError(null);
       if (data.length > 0 && !selectedSessionId) {
@@ -107,6 +122,7 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedSessionId) {
+      setLoadedDetailsId(null);
       setSegments([]);
       setMom(null);
       return;
@@ -119,6 +135,7 @@ export default function App() {
       try {
         const details = await fetchSessionDetails(selectedSessionId);
         if (disposed) return;
+        setLoadedDetailsId(selectedSessionId);
         setSegments(details.segments);
         setMom(details.mom);
         if (
@@ -137,7 +154,10 @@ export default function App() {
         );
         setGatewayConnected(true);
         setApiError(null);
-        const isTerminal = ['COMPLETED', 'FAILED'].includes(details.session?.status ?? '');
+        const stages = Object.values(details.session?.pipeline_stages ?? {});
+        const isTerminal = stages.length
+          ? stages.every((stage) => ['completed', 'failed'].includes(stage))
+          : ['COMPLETED', 'FAILED'].includes(details.session?.status ?? '');
         if (isGeneratingMom || !isTerminal) {
           timer = window.setTimeout(refreshDetails, 2500);
         }
@@ -175,7 +195,7 @@ export default function App() {
       momSnapshotRef.current = mom ? JSON.stringify(mom) : null;
       setApiError(null);
       await generateMom(selectedSessionId, Boolean(mom));
-      setApiError('Meeting notes are being generated in Hinglish...');
+      setApiError('Meeting notes are queued.');
       momTimeoutRef.current = window.setTimeout(() => {
         setIsGeneratingMom(false);
         momTimeoutRef.current = undefined;
@@ -190,19 +210,6 @@ export default function App() {
     }
   };
 
-  const handleClearData = async () => {
-    if (!window.confirm('Delete all test/simulated data? Your recorded memories will be cleared.')) return;
-    try {
-      await flushTestData();
-      setSelectedSessionId(null);
-      setSegments([]);
-      setMom(null);
-      await loadSessions();
-      setApiError('Test data cleared successfully.');
-    } catch (e: any) {
-      setApiError(`Failed to clear test data: ${e.message}`);
-    }
-  };
 
   const activeTabConfig = tabConfig.find(t => t.id === activeTab)!;
 
@@ -335,15 +342,6 @@ export default function App() {
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{activeTabConfig.sublabel}</p>
           </div>
-          {activeTab === 'stream' && (
-            <button
-              onClick={handleClearData}
-              className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-700 bg-rose-50 dark:bg-rose-500/10 hover:bg-rose-100 border border-rose-200 dark:border-rose-500/25 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Clear Test Data
-            </button>
-          )}
         </div>
 
         {/* Error / Info Banner */}
@@ -359,8 +357,7 @@ export default function App() {
         )}
 
         {/* ─── TAB: Live Studio ─── */}
-        {activeTab === 'stream' && (
-          <div className="space-y-5 animate-fade-in-up">
+        <div hidden={activeTab !== 'stream'} className="space-y-5 animate-fade-in-up">
             <AudioRecorder
               onSessionCreated={handleSessionCreated}
               onViewTranscript={(sessionId) => {
@@ -435,7 +432,6 @@ export default function App() {
               )}
             </div>
           </div>
-        )}
 
         {/* ─── TAB: Transcript & MOM ─── */}
         {activeTab === 'mom' && (
@@ -494,14 +490,33 @@ export default function App() {
 
             {/* Main Content */}
             <div className="space-y-5">
+              {selectedSession?.pipeline_stages && Object.keys(selectedSession.pipeline_stages).length > 0 && (
+                <section aria-label="Processing stages" className="glass-card flex flex-wrap gap-4 rounded-2xl p-4 text-sm">
+                  {Object.entries({ transcription: 'Transcript', embedding: 'Search index', features: 'Meeting insights' }).map(([stage, label]) => {
+                    const state = selectedSession.pipeline_stages?.[stage] ?? 'waiting';
+                    return <div key={stage} className="flex items-center gap-2">
+                      <span>{label} · {state === 'dispatched' ? 'processing' : state}</span>
+                      {state === 'failed' && <button onClick={() => handleRetryStage(stage)} className="text-sky-700 dark:text-sky-300">Retry</button>}
+                    </div>;
+                  })}
+                </section>
+              )}
               <MomViewer
-                mom={mom}
+                key={selectedSessionId}
+                version={selectedSession?.mom_version ?? undefined}
+                onReviewed={(updatedMom, version) => {
+                  setMom(updatedMom);
+                  setSessions((current) => current.map((item) =>
+                    item.id === selectedSessionId ? { ...item, mom_version: version } : item,
+                  ));
+                }}
+                mom={loadedDetailsId === selectedSessionId ? mom : null}
                 sessionId={selectedSessionId}
                 onGenerateMOM={handleGenerateMom}
                 onSessionDeleted={() => { setSelectedSessionId(null); loadSessions(); }}
                 isGenerating={isGeneratingMom}
               />
-              <TranscriptViewer segments={segments} isLoading={isLoadingDetails} />
+              <TranscriptViewer segments={loadedDetailsId === selectedSessionId ? segments : []} isLoading={isLoadingDetails} />
             </div>
           </div>
         )}

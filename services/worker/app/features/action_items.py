@@ -30,7 +30,7 @@ class ActionItemProvider(BaseFeatureProvider):
         messages = [
             {
                 "role": "system",
-                "content": "You are a highly efficient assistant. Extract all actionable tasks, including assignees, deadlines, priorities, and exact source quotes from the transcript."
+                "content": "You are a highly efficient assistant. Extract all actionable tasks, including assignees, deadlines, priorities, and verbatim source quotes, each from one transcript turn. Leave unstated assignees and dates null."
             },
             {
                 "role": "user",

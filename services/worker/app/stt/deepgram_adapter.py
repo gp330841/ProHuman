@@ -45,12 +45,12 @@ class DeepgramAdapter(BaseSTTAdapter):
         # Setting up deepgram client
         self.client = DeepgramClient(api_key)
 
-    async def transcribe(self, audio_url: str, config: dict[str, Any] | None = None) -> STTResult:
+    async def transcribe(self, audio_url: str | bytes, config: dict[str, Any] | None = None) -> STTResult:
         """Method documentation."""
-        logger.info("transcribing_with_deepgram", audio_url=audio_url)
+        logger.info("transcribing_with_deepgram")
         language_config = (config or {}).get('language', 'auto')
         options = PrerecordedOptions(
-            model='nova-2',
+            model='nova-3',
             diarize=True,
             smart_format=True,
             utterances=True,
@@ -61,17 +61,12 @@ class DeepgramAdapter(BaseSTTAdapter):
 
         for attempt in range(3):
             try:
-                # Wrap the synchronous SDK call in an executor if needed, 
-                # but deepgram-sdk usually provides an async client as well via `DeepgramClient` 
-                # Actually, in deepgram-sdk>=3.4, you can do:
-                # response = await self.client.listen.asyncprerecorded.v("1").transcribe_url({"url": audio_url}, options)
-                
-                # Assuming standard async usage for Deepgram SDK >= 3.4
-                response = await self.client.listen.asyncprerecorded.v("1").transcribe_url(
-                    {"url": audio_url},
-                    options
-                )
-                
+                prerecorded = self.client.listen.asyncprerecorded.v("1")
+                if isinstance(audio_url, bytes):
+                    response = await prerecorded.transcribe_file({"buffer": audio_url}, options)
+                else:
+                    response = await prerecorded.transcribe_url({"url": audio_url}, options)
+
                 raw_data = response.to_dict()
                 results = raw_data.get("results", {})
                 utterances = results.get("utterances", [])

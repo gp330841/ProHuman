@@ -12,7 +12,8 @@ import {
   Zap,
   Leaf
 } from 'lucide-react';
-import { MOMData, exportMom, deleteSession } from '../api/client';
+import { EvidencePlayer, evidenceTime } from './EvidencePlayer';
+import { MOMData, exportMom, deleteSession, reviewActionItem, type TranscriptEvidence } from '../api/client';
 
 interface Props {
   mom: MOMData | null;
@@ -20,6 +21,8 @@ interface Props {
   onGenerateMOM?: () => void;
   onSessionDeleted?: () => void;
   isGenerating?: boolean;
+  version?: number;
+  onReviewed?: (mom: MOMData, version: number) => void;
 }
 
 export const MomViewer: React.FC<Props> = ({ 
@@ -27,8 +30,14 @@ export const MomViewer: React.FC<Props> = ({
   sessionId, 
   onGenerateMOM, 
   onSessionDeleted, 
-  isGenerating 
+  isGenerating,
+  version,
+  onReviewed,
 }) => {
+  const [evidence, setEvidence] = useState<TranscriptEvidence | null>(null);
+  const [edit, setEdit] = useState<{ index: number; version: number; description: string; assignee: string; deadline: string } | null>(null);
+  const [reviewError, setReviewError] = useState('');
+  const [savingReview, setSavingReview] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
@@ -37,6 +46,27 @@ export const MomViewer: React.FC<Props> = ({
   const toggleItem = (idx: number) => {
     setCompletedItems((prev) => ({ ...prev, [idx]: !prev[idx] }));
   };
+
+  async function saveReview(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!sessionId || !edit) return;
+    setSavingReview(true);
+    setReviewError('');
+    try {
+      const result = await reviewActionItem(sessionId, edit.index, {
+        version: edit.version,
+        description: edit.description.trim(),
+        assignee: edit.assignee.trim() || null,
+        deadline: edit.deadline || null,
+      });
+      onReviewed?.(result.mom, result.version);
+      setEdit(null);
+    } catch (error) {
+      setReviewError(error instanceof Error ? error.message : 'Could not save action item');
+    } finally {
+      setSavingReview(false);
+    }
+  }
 
   const handleExport = async (format: 'markdown' | 'json') => {
     if (!sessionId) return;
@@ -223,6 +253,7 @@ export const MomViewer: React.FC<Props> = ({
         )}
       </div>
 
+      {evidence && <EvidencePlayer evidence={evidence} onClose={() => setEvidence(null)} />}
       {/* Action Items & Decisions Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Action Items */}
@@ -237,6 +268,27 @@ export const MomViewer: React.FC<Props> = ({
             </span>
           </div>
 
+          {edit && (
+            <form onSubmit={saveReview} className="mb-4 space-y-2 rounded-xl border border-slate-300 p-3 text-sm dark:border-slate-700">
+              <label className="block">Action item
+                <input className="block w-full rounded border border-slate-300 bg-transparent p-1 dark:border-slate-700" required
+                  value={edit.description} onChange={(event) => setEdit({ ...edit, description: event.target.value })} />
+              </label>
+              <label className="block">Assignee
+                <input className="block w-full rounded border border-slate-300 bg-transparent p-1 dark:border-slate-700"
+                  value={edit.assignee} onChange={(event) => setEdit({ ...edit, assignee: event.target.value })} />
+              </label>
+              <label className="block">Due date
+                <input type="date" className="block rounded border border-slate-300 bg-transparent p-1 dark:border-slate-700"
+                  value={edit.deadline} onChange={(event) => setEdit({ ...edit, deadline: event.target.value })} />
+              </label>
+              {reviewError && <p role="alert" className="text-rose-600">{reviewError}</p>}
+              <div className="flex gap-3">
+                <button type="submit" disabled={savingReview} className="rounded bg-sky-700 px-3 py-1 text-white">Save changes</button>
+                <button type="button" onClick={() => setEdit(null)} disabled={savingReview}>Cancel</button>
+              </div>
+            </form>
+          )}
           {mom.action_items && mom.action_items.length > 0 ? (
             <div className="space-y-3">
               {mom.action_items.map((item, idx) => {
@@ -263,9 +315,23 @@ export const MomViewer: React.FC<Props> = ({
                         </p>
                         <div className="flex items-center justify-between gap-2 mt-2 text-xs text-slate-500">
                           <span className="text-slate-700 dark:text-slate-300 font-medium">
-                            👤 {item.assignee || 'Team'}
+                            👤 {item.assignee || 'Unassigned'}
                           </span>
                           {renderPriorityBadge(item.priority)}
+                          {version !== undefined && (
+                            <button className="text-sky-700 dark:text-sky-300" onClick={(event) => {
+                              event.stopPropagation();
+                              setReviewError('');
+                              setEdit({ index: idx, version, description: item.description,
+                                assignee: item.assignee ?? '', deadline: item.deadline ?? '' });
+                            }}>Edit</button>
+                          )}
+                          {item.evidence && (
+                            <button className="text-sky-700 dark:text-sky-300" onClick={(event) => {
+                              event.stopPropagation();
+                              setEvidence(item.evidence ?? null);
+                            }}>Play at {evidenceTime(item.evidence.start_time)}</button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -299,6 +365,12 @@ export const MomViewer: React.FC<Props> = ({
                   </div>
                   <div>
                     <p className="text-xs md:text-sm text-slate-800 dark:text-slate-200 leading-relaxed">{dec.description}</p>
+                    {dec.evidence && (
+                      <button className="mt-1 text-xs text-sky-700 dark:text-sky-300"
+                        onClick={() => setEvidence(dec.evidence ?? null)}>
+                        Play at {evidenceTime(dec.evidence.start_time)}
+                      </button>
+                    )}
                     {dec.made_by && (
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">
                         Agreed by: <span className="text-purple-600 dark:text-purple-300 font-medium">{dec.made_by}</span>

@@ -9,7 +9,8 @@ import {
   Zap,
   MessageSquare,
 } from 'lucide-react';
-import { queryAgent } from '../api/client';
+import { queryAgent, type TranscriptEvidence } from '../api/client';
+import { EvidencePlayer, evidenceTime } from './EvidencePlayer';
 import { useUser } from '../context/UserContext';
 
 interface ChatMessage {
@@ -18,6 +19,7 @@ interface ChatMessage {
   text: string;
   latencyMs?: number;
   timestamp: string;
+  citations?: TranscriptEvidence[];
 }
 
 const STARTER_PROMPTS = [
@@ -46,6 +48,7 @@ export const AgentChat: React.FC = () => {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
+  const [evidence, setEvidence] = useState<TranscriptEvidence | null>(null);
   const [inputQuery, setInputQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -77,12 +80,13 @@ export const AgentChat: React.FC = () => {
     setTimeout(() => inputRef.current?.focus(), 50);
 
     try {
-      const res = await queryAgent(userMsg.text, activeUser.id);
+      const res = await queryAgent(userMsg.text);
       const agentMsg: ChatMessage = {
         id: `agent-${Date.now()}`,
         sender: 'agent',
         text: res.response || 'No response generated.',
         latencyMs: res.latency_ms,
+        citations: res.citations,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, agentMsg]);
@@ -106,6 +110,7 @@ export const AgentChat: React.FC = () => {
   };
 
   const handleClear = () => {
+    setEvidence(null);
     setMessages([
       {
         id: `welcome-${Date.now()}`,
@@ -156,6 +161,7 @@ export const AgentChat: React.FC = () => {
 
   return (
     <div className="glass-card rounded-3xl flex flex-col h-[calc(100vh-180px)] min-h-[560px] max-h-[800px] relative overflow-hidden">
+      {evidence && <EvidencePlayer evidence={evidence} onClose={() => setEvidence(null)} />}
 
       {/* ── Header ── */}
       <div className="px-5 py-4 border-b border-slate-200 dark:border-white/[0.07] flex items-center justify-between bg-white/60 dark:bg-white/[0.015] shrink-0">
@@ -218,6 +224,16 @@ export const AgentChat: React.FC = () => {
                   : 'bg-white dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] text-slate-800 dark:text-slate-200 rounded-tl-sm'
               }`}>
                 {renderFormattedText(msg.text)}
+                {msg.citations?.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {msg.citations.map((citation, index) => (
+                      <button key={citation.segment_id} onClick={() => setEvidence(citation)}
+                        className="rounded-lg border border-slate-300 px-2 py-1 text-xs text-sky-700 dark:border-slate-700 dark:text-sky-300">
+                        [{index + 1}] {evidenceTime(citation.start_time)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
 
               {/* Footer */}

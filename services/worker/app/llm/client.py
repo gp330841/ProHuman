@@ -106,8 +106,8 @@ class LLMClient:
                 '  "executive_summary": "Detailed summary explaining what was discussed, conclusions, and next steps in English or natural Hindi+English",\n'
                 '  "attendees": ["Speaker 1"],\n'
                 '  "agenda_items": [{"topic": "Topic Name", "summary": "Discussion summary", "duration_seconds": 60, "speakers_involved": ["Speaker 1"]}],\n'
-                '  "decisions": [{"description": "What was agreed or decided", "made_by": "Speaker 1"}],\n'
-                '  "action_items": [{"description": "Action task", "assignee": "Speaker 1", "priority": "medium", "status": "pending"}],\n'
+                '  "decisions": [{"description": "What was agreed or decided", "made_by": null, "context_quote": "Verbatim transcript quote"}],\n'
+                '  "action_items": [{"description": "Action task", "assignee": null, "deadline": null, "priority": "medium", "source_quote": "Verbatim transcript quote"}],\n'
                 '  "follow_ups": [{"description": "Next steps", "responsible_party": "Speaker 1"}]\n'
                 '}'
             )
@@ -123,7 +123,7 @@ class LLMClient:
         elif response_model.__name__ == "ActionItemsResult":
             schema_repr = (
                 '{\n'
-                '  "items": [{"description": "Action item description", "assignee": "Team", "priority": "medium", "status": "pending"}]\n'
+                '  "items": [{"description": "Action item description", "assignee": null, "deadline": null, "priority": "medium", "source_quote": "Verbatim transcript quote"}]\n'
                 '}'
             )
         else:
@@ -183,20 +183,22 @@ class LLMClient:
                     if isinstance(d, str):
                         norm_dec.append({"description": d})
                     elif isinstance(d, dict):
-                        norm_dec.append({"description": d.get("description") or d.get("decision") or str(d)})
+                        norm_dec.append({**d, "description": d.get("description") or d.get("decision") or str(d)})
                 parsed_json["decisions"] = norm_dec
 
             if isinstance(parsed_json.get("action_items"), list):
                 norm_act = []
                 for a in parsed_json["action_items"]:
                     if isinstance(a, str):
-                        norm_act.append({"description": a, "assignee": "Team", "priority": "medium", "status": "pending"})
+                        norm_act.append({"description": a, "priority": "medium"})
                     elif isinstance(a, dict):
                         desc = a.get("description") or a.get("task") or a.get("action") or str(a)
                         p = str(a.get("priority", "medium")).lower()
                         norm_act.append({
                             "description": desc,
-                            "assignee": a.get("assignee") or "Team",
+                            "assignee": a.get("assignee"),
+                            "deadline": a.get("deadline"),
+                            "source_quote": a.get("source_quote"),
                             "priority": p if p in ["critical", "high", "medium", "low"] else "medium",
                             "status": "pending",
                         })
@@ -245,7 +247,9 @@ class LLMClient:
                     desc = it.get("description") or it.get("task") or str(it)
                     norm_items.append({
                         "description": desc,
-                        "assignee": it.get("assignee") or "Team",
+                        "assignee": it.get("assignee"),
+                        "deadline": it.get("deadline"),
+                        "source_quote": it.get("source_quote"),
                         "priority": "medium",
                         "status": "pending",
                     })

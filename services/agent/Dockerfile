@@ -4,10 +4,12 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir build setuptools wheel
 
-COPY pyproject.toml .
-COPY app ./app
+COPY services/agent/pyproject.toml /build/agent/
+COPY services/agent/app /build/agent/app
+COPY services/agent/app ./app
+COPY packages ./packages
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir /build/agent
 
 ENV PYTHONPATH=/app
 

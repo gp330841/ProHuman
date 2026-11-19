@@ -14,7 +14,7 @@ tasks:
   dev:
     desc: "Start all infrastructure and application services in detached mode"
     cmds:
-      - docker compose -f infra/docker-compose.yml up -d
+      - docker compose -f infra/docker-compose.yml up -d --build
 
   dev:down:
     desc: "Stop and remove all running development containers"
@@ -45,22 +45,25 @@ tasks:
   test:
     desc: "Run pytest across all packages and services"
     cmds:
-      - pytest packages/ services/gateway/ services/worker/ services/agent/ {{.CLI_ARGS}}
+      - pytest packages/ {{.CLI_ARGS}}
+      - task: test:gateway
+      - task: test:worker
+      - task: test:agent
 
   test:gateway:
     desc: "Run pytest for gateway service"
     cmds:
-      - pytest services/gateway/ {{.CLI_ARGS}}
+      - PYTHONPATH="{{.PWD}}:{{.PWD}}/services/gateway" pytest -o pythonpath=. services/gateway/ {{.CLI_ARGS}}
 
   test:worker:
     desc: "Run pytest for worker service"
     cmds:
-      - pytest services/worker/ {{.CLI_ARGS}}
+      - PYTHONPATH="{{.PWD}}:{{.PWD}}/services/worker" pytest -o pythonpath=. services/worker/ {{.CLI_ARGS}}
 
   test:agent:
     desc: "Run pytest for agent service"
     cmds:
-      - pytest services/agent/ {{.CLI_ARGS}}
+      - PYTHONPATH="{{.PWD}}:{{.PWD}}/services/agent" pytest -o pythonpath=. services/agent/ {{.CLI_ARGS}}
 
   lint:
     desc: "Run ruff check and mypy type checking on packages and services"

@@ -1,13 +1,14 @@
 """Module for dependencies.py."""
 from __future__ import annotations
 
-from typing import AsyncGenerator, Any
+from typing import AsyncGenerator
 
 from fastapi import Depends
 from redis.asyncio import Redis, ConnectionPool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings, Settings
+from packages.access import Principal, require_member, require_principal
 from packages.db.engine import get_db_session
 from packages.db.repositories.session_repo import SessionRepository
 from packages.db.repositories.transcript_repo import TranscriptRepository
@@ -48,12 +49,22 @@ async def get_storage(settings: Settings = Depends(get_settings)) -> AsyncGenera
     
     yield _s3_service
 
-def get_session_repo(db: AsyncSession = Depends(get_db)) -> SessionRepository:
+def get_session_repo(
+    principal: Principal = Depends(require_principal),
+    db: AsyncSession = Depends(get_db),
+) -> SessionRepository:
     """Dependency to get SessionRepository."""
-    return SessionRepository(db)
+    return SessionRepository(
+        db, principal.workspace_id,
+        owner_id=None if principal.role == "admin" else principal.user_id,
+        restrict_reads=principal.role == "device",
+    )
 
-def get_transcript_repo(db: AsyncSession = Depends(get_db)) -> TranscriptRepository:
+def get_transcript_repo(
+    principal: Principal = Depends(require_member),
+    db: AsyncSession = Depends(get_db),
+) -> TranscriptRepository:
     """Dependency to get TranscriptRepository."""
-    return TranscriptRepository(db)
+    return TranscriptRepository(db, principal.workspace_id)
 
 __all__ = ["get_db", "get_redis", "get_storage", "get_session_repo", "get_transcript_repo"]

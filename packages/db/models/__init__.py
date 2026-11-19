@@ -9,6 +9,7 @@ from .session import Session, SessionStatusEnum
 from .audio_chunk import AudioChunk
 from .transcript import TranscriptSegment
 from .feature_result import FeatureResultModel
+from .pipeline_job import PipelineJob
 
 __all__ = [
     "Session",
@@ -16,4 +17,5 @@ __all__ = [
     "AudioChunk",
     "TranscriptSegment",
     "FeatureResultModel",
+    "PipelineJob",
 ]

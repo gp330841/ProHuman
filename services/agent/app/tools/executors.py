@@ -6,9 +6,8 @@ Connects Agent Tool calls to DB Repositories, LiteLLM/Instructor, and external s
 
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import datetime, date
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -44,6 +43,8 @@ from app.tools.schemas import (
 
 async def execute_search_conversations(
     input: SearchConversationsInput,
+    *,
+    workspace_id: UUID,
 ) -> SearchConversationsOutput:
     """Execute hybrid search using pgvector and PostgreSQL full-text search."""
     query_embedding = [0.0] * 1536
@@ -60,32 +61,34 @@ async def execute_search_conversations(
             pass
 
     async with get_db_context() as session:
-        repo = TranscriptRepository(session)
-        rows = []
-        try:
-            rows = await repo.hybrid_search(
-                query_text=input.query,
-                query_embedding=query_embedding,
-                limit=input.limit,
-                offset=input.offset,
-                session_ids=input.session_ids,
-                time_range_start=input.time_range_start,
-                time_range_end=input.time_range_end,
-                search_mode=input.search_mode.value.upper(),
-            )
-        except Exception:
-            rows = []
+        repo = TranscriptRepository(session, workspace_id)
+        rows = await repo.hybrid_search(
+            query_text=input.query,
+            query_embedding=query_embedding,
+            limit=input.limit,
+            offset=input.offset,
+            session_ids=input.session_ids,
+            time_range_start=input.time_range_start,
+            time_range_end=input.time_range_end,
+            search_mode=input.search_mode.value.upper(),
+        )
 
-        if not rows and input.query.strip():
+        if not rows and input.search_mode != SearchMode.SEMANTIC and input.query.strip():
             # Robust fallback: ILIKE query for Hinglish/mixed terms
-            from sqlalchemy import select, or_
+            from sqlalchemy import or_
             from packages.db.models.transcript import TranscriptSegment
             words = [w for w in input.query.strip().split() if len(w) > 2]
-            stmt = select(TranscriptSegment)
-            if words:
-                conds = [TranscriptSegment.text.ilike(f"%{w}%") for w in words]
-                stmt = stmt.filter(or_(*conds))
-            stmt = stmt.order_by(TranscriptSegment.created_at.desc()).limit(input.limit)
+            terms = words or [input.query.strip()]
+            stmt = repo.scoped_segments().where(
+                or_(*(TranscriptSegment.text.icontains(term, autoescape=True) for term in terms))
+            )
+            if input.session_ids:
+                stmt = stmt.where(TranscriptSegment.session_id.in_(input.session_ids))
+            if input.time_range_start is not None:
+                stmt = stmt.where(TranscriptSegment.created_at >= input.time_range_start)
+            if input.time_range_end is not None:
+                stmt = stmt.where(TranscriptSegment.created_at <= input.time_range_end)
+            stmt = stmt.order_by(TranscriptSegment.created_at.desc()).offset(input.offset).limit(input.limit)
             res = await session.execute(stmt)
             for seg in res.scalars().all():
                 rows.append({
@@ -112,8 +115,8 @@ async def execute_search_conversations(
 
             results.append(
                 SearchResultSegment(
-                    segment_id=seg_id or uuid.uuid4(),
-                    session_id=sess_id or uuid.uuid4(),
+                    segment_id=seg_id,
+                    session_id=sess_id,
                     speaker_label=row.get("speaker_label", "speaker_0"),
                     text=row.get("text", ""),
                     start_time=float(row.get("start_time", 0.0)),
@@ -135,10 +138,12 @@ async def execute_search_conversations(
 
 async def execute_fetch_context(
     input: FetchConversationContextInput,
+    *,
+    workspace_id: UUID,
 ) -> FetchConversationContextOutput:
     """Retrieve windowed transcript segments around a timestamp, segment ID, or turns."""
     async with get_db_context() as session:
-        repo = TranscriptRepository(session)
+        repo = TranscriptRepository(session, workspace_id)
         all_segments = await repo.get_by_session(input.session_id, order_by_index=True)
 
         if not all_segments:
@@ -198,9 +203,13 @@ async def execute_fetch_context(
 
 async def execute_generate_mom(
     input: GenerateMOMInput,
+    *,
+    workspace_id: UUID,
 ) -> GenerateMOMOutput:
     """Extract Minutes of Meeting, decisions, and action items using LLM and cached feature results."""
     async with get_db_context() as session:
+        if not await SessionRepository(session, workspace_id).get(input.session_id):
+            raise ValueError("Session not found")
         feat_repo = FeatureRepository(session)
         if not input.force_regenerate:
             cached = await feat_repo.get_by_session_and_name(input.session_id, "mom")
@@ -210,7 +219,7 @@ async def execute_generate_mom(
                     session_id=input.session_id,
                     version=cached.version,
                     title=d.get("title", "Meeting MOM"),
-                    date=datetime.utcnow(),
+                    date=datetime.now(timezone.utc),
                     duration_seconds=d.get("duration_seconds"),
                     attendees=d.get("attendees", []),
                     agenda_items=[AgendaItem(**a) for a in d.get("agenda_items", [])],
@@ -221,139 +230,22 @@ async def execute_generate_mom(
                     model_used=cached.provider_model or "gpt-4o",
                 )
 
-        trans_repo = TranscriptRepository(session)
-        segments = await trans_repo.get_by_session(input.session_id)
-        if not segments:
-            raise ValueError(f"No transcript exists for session {input.session_id}")
-        transcript_text = "\n".join([f"{s.speaker_label}: {s.text}" for s in segments])
-
-        import os
-        import httpx
-        mom_data = None
-        gemini_key = os.getenv("GEMINI_API_KEY")
-        if gemini_key:
-            system_prompt = (
-                "Extract meeting notes as strictly valid JSON with keys: title (str), attendees (list of str), "
-                "agenda_items (list of objects with topic, summary, speakers_involved), "
-                "decisions (list of objects with decision, rationale, decided_by, timestamp_seconds), "
-                "action_items (list of objects with task, assignee, due_date, priority, status), "
-                "follow_ups (list of objects with topic, owner, context), "
-                "and executive_summary (str). Write in clean English or natural Hindi+English (use standard English for technical and business terms). "
-                "If any speaker explicitly suggests, dictates, or asks to keep a specific title (e.g. 'iska title rakhna...', 'title suggest kar raha hoon ki...'), adopt that exact title! "
-                "Output JSON only."
-            )
-            payload = {
-                "contents": [{"parts": [{"text": f"{system_prompt}\n\nTranscript:\n{transcript_text[:12000]}"}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "temperature": 0.2,
-                }
-            }
-            gemini_models = [
-                "gemini-3.8-flash",
-                "gemini-3.5-flash",
-                "gemini-3.5-flash-lite",
-                "gemini-2.5-flash",
-                "gemini-2.0-flash",
-                "gemini-1.5-flash",
-            ]
-            for m_name in gemini_models:
-                try:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={gemini_key}"
-                    async with httpx.AsyncClient(timeout=45.0) as client:
-                        resp = await client.post(url, json=payload)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            content = data["candidates"][0]["content"]["parts"][0]["text"]
-                            cleaned = content.strip()
-                            if cleaned.startswith("```json"):
-                                cleaned = cleaned[7:]
-                            elif cleaned.startswith("```"):
-                                cleaned = cleaned[3:]
-                            if cleaned.endswith("```"):
-                                cleaned = cleaned[:-3]
-                            mom_data = json.loads(cleaned.strip())
-                            break
-                except Exception:
-                    pass
-
-        has_api_key = bool(os.getenv("OPENAI_API_KEY"))
-        if not mom_data and has_api_key:
-            try:
-                import litellm
-                messages = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Extract meeting notes as JSON with title, attendees, agenda_items, "
-                            "decisions, action_items, follow_ups, and executive_summary. "
-                            "Write all fields in Roman Hinglish. Use only facts supported by the transcript."
-                        ),
-                    },
-                    {"role": "user", "content": transcript_text[:12000]},
-                ]
-                response = await litellm.acompletion(
-                    model=os.getenv("LLM_MODEL", "gpt-4o"),
-                    messages=messages,
-                    response_format={"type": "json_object"},
-                )
-                content = response.choices[0].message.content
-                if content:
-                    mom_data = json.loads(content)
-            except Exception:
-                mom_data = None
-
-        if not mom_data:
-            summary_preview = " ".join([s.text for s in segments[:5]])
-            mom_data = {
-                "title": f"Conversation Notes - {str(input.session_id)[:8]}",
-                "attendees": list({s.speaker_label for s in segments if s.speaker_label}),
-                "agenda_items": [
-                    {"topic": "Discussion & Review", "summary": summary_preview[:200], "speakers_involved": []}
-                ],
-                "decisions": [
-                    {"description": f"Decided to proceed based on discussion points: {summary_preview[:120]}", "made_by": "Team"}
-                ],
-                "action_items": [
-                    {"description": f"Review points discussed: {summary_preview[:150]}", "assignee": "You", "status": "pending", "priority": "medium"}
-                ],
-                "follow_ups": [],
-                "executive_summary": f"Meeting me discuss hua: {summary_preview[:300]}",
-            }
-
-        next_ver = await feat_repo.get_latest_version(input.session_id, "mom") + 1
-        await feat_repo.create(
-            session_id=input.session_id,
-            feature_name="mom",
-            version=next_ver,
-            data=mom_data,
-            provider_model="gpt-4o",
-        )
-
-        return GenerateMOMOutput(
-            session_id=input.session_id,
-            version=next_ver,
-            title=mom_data["title"],
-            date=datetime.utcnow(),
-            attendees=mom_data.get("attendees", []),
-            agenda_items=[AgendaItem(**a) for a in mom_data.get("agenda_items", [])],
-            decisions=[ExtractedDecision(**dec) for dec in mom_data.get("decisions", [])],
-            action_items=[ExtractedActionItem(**act) for act in mom_data.get("action_items", [])],
-            follow_ups=[ExtractedFollowUp(**fu) for fu in mom_data.get("follow_ups", [])],
-            executive_summary=mom_data["executive_summary"],
-        )
+        raise ValueError("Saved notes unavailable. Use transcript evidence or generate notes in the dashboard.")
 
 
 async def execute_query_action_items(
     input: QueryActionItemsInput,
+    *,
+    workspace_id: UUID,
 ) -> QueryActionItemsOutput:
     """Retrieve historical action items across meetings with multi-criteria filtering."""
     async with get_db_context() as session:
         feat_repo = FeatureRepository(session)
-        sess_repo = SessionRepository(session)
+        sess_repo = SessionRepository(session, workspace_id)
 
-        sessions_to_query = [input.session_id] if input.session_id else []
-        if not sessions_to_query:
+        if input.session_id:
+            sessions_to_query = [input.session_id] if await sess_repo.get(input.session_id) else []
+        else:
             all_s, _ = await sess_repo.list_sessions(limit=50, offset=0)
             sessions_to_query = [s.id for s in all_s]
 
@@ -397,8 +289,13 @@ async def execute_query_action_items(
 
 async def execute_trigger_external(
     input: TriggerExternalActionInput,
+    *,
+    workspace_id: UUID,
 ) -> TriggerExternalActionOutput:
     """Push structured MOM or tasks to external endpoints (Slack, Notion, Webhooks)."""
+    async with get_db_context() as session:
+        if not await SessionRepository(session, workspace_id).get(input.session_id):
+            raise ValueError("Session not found")
     action_id = uuid.uuid4()
     preview = input.content_override or f"Pushing meeting intelligence for session {input.session_id}"
 

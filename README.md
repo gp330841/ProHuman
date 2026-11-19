@@ -67,7 +67,7 @@ flowchart TD
    - `contracts/`: Strongly-typed Pydantic v2 domain models for audio sessions, transcription chunks, feature schemas, and search requests.
    - `db/`: SQLAlchemy 2.0 async engine, declarative models (with pgvector support), repository pattern abstractions, and Alembic migrations.
 2. **Gateway Service (`services/gateway/`)**:
-   - High-throughput FastAPI application accepting WebSocket audio streams and REST endpoints for session management and transcript searches.
+   - High-throughput FastAPI application handling authenticated recording streams, session management, transcript search, and durable job publication.
 3. **Worker Service (`services/worker/`)**:
    - Celery workers divided across specialized queues:
      - `transcription`: Speech-to-text processing (Deepgram SDK).
@@ -110,23 +110,41 @@ cp .env.example .env
 
 Edit `.env` to supply your `DEEPGRAM_API_KEY` and `OPENAI_API_KEY`.
 
-### 2. Spin Up Infrastructure & Services
+### 2. Provision a workspace credential
 
-Start all containers in detached mode using `Task`:
-
-```bash
-task dev
-```
-
-This starts PostgreSQL with pgvector, Redis 7, MinIO S3, the Gateway service, 3 Celery worker queues, and the Agent service.
-
-### 3. Run Database Migrations
-
-Apply Alembic schema migrations to initialize tables and vector indices:
+The browser signs in with a workspace access token. Generate the first token locally and keep the raw token in your password manager. Add the generated `PROHUMAN_CREDENTIALS` line to `.env`.
 
 ```bash
-task migrate
+python3 - <<'PYTHON'
+import hashlib
+import json
+import secrets
+import uuid
+
+token = secrets.token_urlsafe(32)
+digest = hashlib.sha256(token.encode()).hexdigest()
+print("Access token for sign-in", token)
+print("PROHUMAN_CREDENTIALS='" + json.dumps({
+    digest: {"user_id": "workspace-admin", "workspace_id": str(uuid.uuid4()), "role": "admin"}
+}, separators=(",", ":")) + "'")
+PYTHON
 ```
+
+Add credentials to the same JSON object to provision additional users. Give each person a unique `user_id`, reuse the workspace UUID for members of the same workspace, and use role `member` for regular users. Device credentials use role `device` with a distinct `user_id` and a fixed `device_id`. Use `Authorization: Bearer <token>` for API clients. Browser capture authenticates during the WebSocket handshake. Restart the gateway and agent after changing the credential configuration.
+
+Owners and workspace administrators can modify a recording. Members of the workspace can read, search, and export it. A device is limited to recordings it owns.
+
+### 3. Start services and apply migrations
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.yml up -d --build
+```
+
+Compose runs Alembic after PostgreSQL is healthy, then starts the gateway, agent, workers, and web UI. Open the web UI on port 3000 and sign in with the raw access token.
+
+For existing installations, the migration retains recordings, transcripts, and insights. Records created before workspace assignment remain private and unlisted. Assign those records to the correct workspace and verified owner using an operator-controlled, reviewed data migration. The old browser profile metadata is insufficient to establish ownership.
+
+The recorder retries connections while its tab remains open, including after switching views within the app. Live captions use Deepgram when the gateway has a key and starts from the first chunk of a supported stream. Audio capture continues through provider failures and reconnects. The batch worker transcribes finalized audio for search and insights. Source-linked action items and decisions can open the recording at their timestamp. Action item edits are saved in a new version used by exports.
 
 ### 4. Verify Services
 

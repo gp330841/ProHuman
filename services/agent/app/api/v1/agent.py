@@ -4,18 +4,21 @@ agent/api/v1/agent.py — Agent Query API Endpoint
 
 from __future__ import annotations
 
-import os
 import time
 import uuid
-from typing import Any
+from functools import partial
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from packages.access import Principal, require_member
+from pydantic import BaseModel, Field
+from packages.contracts.evidence import TranscriptEvidence
 
 from app.runtime.engine import (
     AgentExecutionEngine,
     ToolRegistry,
     AgentConfig,
+    AgentState,
     PolicyEngine,
 )
 from app.config import get_settings
@@ -44,7 +47,6 @@ router = APIRouter()
 
 class AgentQueryRequest(BaseModel):
     query: str
-    user_id: str
     conversation_id: str | None = None
 
 
@@ -54,16 +56,17 @@ class AgentQueryResponse(BaseModel):
     tool_calls_count: int
     tokens_used: int
     latency_ms: int
+    citations: list[TranscriptEvidence] = Field(default_factory=list)
 
 
-def build_tool_registry() -> ToolRegistry:
+def build_tool_registry(workspace_id: UUID) -> ToolRegistry:
     registry = ToolRegistry()
 
     registry.register(
         name="search_conversations",
         input_schema=SearchConversationsInput,
         output_schema=SearchConversationsOutput,
-        executor=execute_search_conversations,
+        executor=partial(execute_search_conversations, workspace_id=workspace_id),
         description="Hybrid search across transcribed conversations with RRF",
         side_effects=False,
     )
@@ -71,7 +74,7 @@ def build_tool_registry() -> ToolRegistry:
         name="fetch_conversation_context",
         input_schema=FetchConversationContextInput,
         output_schema=FetchConversationContextOutput,
-        executor=execute_fetch_context,
+        executor=partial(execute_fetch_context, workspace_id=workspace_id),
         description="Windowed transcript retrieval around a timestamp or turns",
         side_effects=False,
     )
@@ -79,7 +82,7 @@ def build_tool_registry() -> ToolRegistry:
         name="generate_mom_and_actions",
         input_schema=GenerateMOMInput,
         output_schema=GenerateMOMOutput,
-        executor=execute_generate_mom,
+        executor=partial(execute_generate_mom, workspace_id=workspace_id),
         description="Extract MOM, decisions, and action items via LLM",
         side_effects=False,
     )
@@ -87,7 +90,7 @@ def build_tool_registry() -> ToolRegistry:
         name="query_action_items",
         input_schema=QueryActionItemsInput,
         output_schema=QueryActionItemsOutput,
-        executor=execute_query_action_items,
+        executor=partial(execute_query_action_items, workspace_id=workspace_id),
         description="Query action items across historical meetings",
         side_effects=False,
     )
@@ -95,7 +98,7 @@ def build_tool_registry() -> ToolRegistry:
         name="trigger_external_action",
         input_schema=TriggerExternalActionInput,
         output_schema=TriggerExternalActionOutput,
-        executor=execute_trigger_external,
+        executor=partial(execute_trigger_external, workspace_id=workspace_id),
         description="Push content to Slack/Notion/Webhooks",
         requires_approval=True,
         side_effects=True,
@@ -105,7 +108,7 @@ def build_tool_registry() -> ToolRegistry:
 
 
 @router.post("/query", response_model=AgentQueryResponse)
-async def query_agent(req: AgentQueryRequest):
+async def query_agent(req: AgentQueryRequest, principal: Principal = Depends(require_member)):
     """
     Main conversational agent endpoint.
     Executes the Plan-and-Execute with ReAct runtime across conversation memory.
@@ -123,7 +126,7 @@ async def query_agent(req: AgentQueryRequest):
         token_budget_limit=settings.token_budget_limit,
     )
 
-    registry = build_tool_registry()
+    registry = build_tool_registry(principal.workspace_id)
     policy = PolicyEngine(config, webhook_allowlist=set(settings.webhook_allowlist))
 
     llm_client = None
@@ -141,15 +144,25 @@ async def query_agent(req: AgentQueryRequest):
     )
 
     try:
-        response_text = await engine.run(req.query, req.user_id)
+        state = AgentState()
+        response = await engine.run(
+            req.query, f"{principal.workspace_id}:{principal.user_id}",
+            state=state, workspace_id=principal.workspace_id,
+        )
+        response_text, citations = state.cited_answer(response)
+        if not citations and req.query.casefold().strip(" !?.") not in {
+            "hello", "hi", "hey", "namaste", "help", "who are you", "kaise ho", "kya haal"
+        }:
+            response_text = "I couldn’t verify an answer from the available transcript excerpts."
         latency_ms = int((time.time() - start_time) * 1000)
 
         return AgentQueryResponse(
             response=response_text,
             query_id=query_id,
-            tool_calls_count=0,
-            tokens_used=0,
+            tool_calls_count=state.total_hops,
+            tokens_used=state.total_tokens_used,
+            citations=citations,
             latency_ms=latency_ms,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Agent query failed") from e

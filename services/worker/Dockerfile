@@ -9,10 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir build setuptools wheel
 
-COPY pyproject.toml .
-COPY app ./app
+COPY services/worker/pyproject.toml /build/worker/
+COPY services/worker/app /build/worker/app
+COPY services/worker/app ./app
+COPY packages ./packages
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir /build/worker
 
 ENV PYTHONPATH=/app
 

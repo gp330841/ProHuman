@@ -4,23 +4,24 @@ import time
 from typing import Any
 from datetime import datetime, timezone
 import httpx
-from fastapi import APIRouter, Depends
-from sqlalchemy import select, func, delete
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
 from app.dependencies import get_db, get_redis, get_storage
 from app.services.storage import S3StorageService
+from packages.access import Principal, require_admin
 from packages.db.models.session import Session
 from packages.db.models.transcript import TranscriptSegment
 from packages.db.models.feature_result import FeatureResultModel
-from packages.db.models.audio_chunk import AudioChunk
 
 router = APIRouter()
 
 
 @router.get("/status")
 async def get_system_status(
+    principal: Principal = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
     storage: S3StorageService = Depends(get_storage),
@@ -39,15 +40,16 @@ async def get_system_status(
     # 1. PostgreSQL Status & Database Metrics
     db_start = time.perf_counter()
     try:
-        sess_count_stmt = select(func.count(Session.id))
+        sess_count_stmt = select(func.count(Session.id)).where(Session.workspace_id == principal.workspace_id)
         sess_res = await db.execute(sess_count_stmt)
         total_sessions = sess_res.scalar_one() or 0
 
-        seg_count_stmt = select(func.count(TranscriptSegment.id))
+        seg_count_stmt = select(func.count(TranscriptSegment.id)).join(Session).where(Session.workspace_id == principal.workspace_id)
         seg_res = await db.execute(seg_count_stmt)
         total_segments = seg_res.scalar_one() or 0
 
-        mom_count_stmt = select(func.count(FeatureResultModel.id)).filter(
+        mom_count_stmt = select(func.count(FeatureResultModel.id)).join(Session).where(
+            Session.workspace_id == principal.workspace_id,
             FeatureResultModel.feature_name == "mom"
         )
         mom_res = await db.execute(mom_count_stmt)
@@ -114,15 +116,9 @@ async def get_system_status(
 
 
 @router.post("/flush-test-data")
-async def flush_test_data(
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
+async def flush_test_data() -> None:
     """
     Safely cleans demo/test session records from the database.
     """
-    await db.execute(delete(FeatureResultModel))
-    await db.execute(delete(TranscriptSegment))
-    await db.execute(delete(AudioChunk))
-    await db.execute(delete(Session))
-    await db.commit()
-    return {"message": "All session and transcript data cleared safely"}
+    # This demo endpoint cannot distinguish test data from real recordings.
+    raise HTTPException(status_code=410, detail="Delete individual test sessions from the dashboard")

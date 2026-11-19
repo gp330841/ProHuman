@@ -1,134 +1,97 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-
-export interface UserProfile {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  deviceId: string;
-  gradient: string;
-}
-
-const DEFAULT_USERS: UserProfile[] = [
-  {
-    id: 'user_yogeshwar',
-    name: 'Yogeshwar Patel',
-    email: 'yogeshwar@prohuman.ai',
-    role: 'Owner & Tech Lead',
-    deviceId: 'neo1-badge-01',
-    gradient: 'from-sky-500 to-indigo-600',
-  },
-  {
-    id: 'user_alex',
-    name: 'Alex Sharma',
-    email: 'alex@prohuman.ai',
-    role: 'Product Manager',
-    deviceId: 'prohuman-desk-02',
-    gradient: 'from-emerald-500 to-teal-600',
-  },
-  {
-    id: 'user_priya',
-    name: 'Priya Verma',
-    email: 'priya@prohuman.ai',
-    role: 'AI Architect',
-    deviceId: 'mobile-companion-03',
-    gradient: 'from-violet-500 to-purple-600',
-  },
-  {
-    id: 'user_guest',
-    name: 'Guest User',
-    email: 'guest@prohuman.ai',
-    role: 'Visitor',
-    deviceId: 'browser-mic-gadget',
-    gradient: 'from-slate-600 to-slate-800',
-  },
-];
+import { createContext, type FormEvent, type PropsWithChildren, useContext, useEffect, useState } from 'react';
+import { fetchIdentity, getAccessToken, setAccessToken, type WorkspaceIdentity } from '../api/client';
 
 interface UserContextType {
-  activeUser: UserProfile;
-  users: UserProfile[];
+  activeUser: { id: string; name: string; role: string; gradient: string };
+  workspaceId: string;
   filterByUserOnly: boolean;
-  setFilterByUserOnly: (val: boolean) => void;
-  switchUser: (user: UserProfile) => void;
-  addUserProfile: (profile: Omit<UserProfile, 'id' | 'gradient'>) => void;
+  setFilterByUserOnly: (value: boolean) => void;
+  signOut: () => void;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
 
-export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [users, setUsers] = useState<UserProfile[]>(() => {
+export function UserProvider({ children }: PropsWithChildren) {
+  const [identity, setIdentity] = useState<WorkspaceIdentity | null>(null);
+  const [filterByUserOnly, setFilterByUserOnly] = useState(false);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(() => Boolean(getAccessToken()));
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token) return;
+    let active = true;
+    fetchIdentity(token).then((user) => {
+      if (active) setIdentity(user);
+    }).catch((failure: Error) => {
+      if (active) setError(failure.message);
+    }).finally(() => {
+      if (active) setBusy(false);
+    });
+    return () => { active = false; };
+  }, []);
+
+  async function signIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
     try {
-      const saved = localStorage.getItem('prohuman_user_profiles');
-      return saved ? JSON.parse(saved) : DEFAULT_USERS;
-    } catch {
-      return DEFAULT_USERS;
+      const token = input.trim();
+      const user = await fetchIdentity(token);
+      setAccessToken(token);
+      setIdentity(user);
+      setInput('');
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Sign-in failed');
+    } finally {
+      setBusy(false);
     }
-  });
+  }
 
-  const [activeUser, setActiveUser] = useState<UserProfile>(() => {
-    try {
-      const savedId = localStorage.getItem('prohuman_active_user_id');
-      const found = users.find((u) => u.id === savedId);
-      return found || users[0] || DEFAULT_USERS[0];
-    } catch {
-      return DEFAULT_USERS[0];
-    }
-  });
-
-  const [filterByUserOnly, setFilterByUserOnly] = useState<boolean>(() => {
-    return localStorage.getItem('prohuman_filter_user_only') === 'true';
-  });
-
-  useEffect(() => {
-    localStorage.setItem('prohuman_user_profiles', JSON.stringify(users));
-  }, [users]);
-
-  useEffect(() => {
-    localStorage.setItem('prohuman_active_user_id', activeUser.id);
-  }, [activeUser]);
-
-  useEffect(() => {
-    localStorage.setItem('prohuman_filter_user_only', String(filterByUserOnly));
-  }, [filterByUserOnly]);
-
-  const switchUser = (user: UserProfile) => {
-    setActiveUser(user);
-  };
-
-  const addUserProfile = (profile: Omit<UserProfile, 'id' | 'gradient'>) => {
-    const id = `user_${Date.now()}`;
-    const gradients = [
-      'from-rose-500 to-pink-600',
-      'from-amber-500 to-orange-600',
-      'from-cyan-500 to-blue-600',
-      'from-fuchsia-500 to-purple-600',
-    ];
-    const gradient = gradients[users.length % gradients.length];
-    const newUser: UserProfile = { ...profile, id, gradient };
-    setUsers((prev) => [...prev, newUser]);
-    setActiveUser(newUser);
-  };
+  if (!identity) {
+    return (
+      <main className="min-h-screen grid place-items-center p-6 bg-slate-50 dark:bg-slate-950">
+        <form onSubmit={signIn} className="w-full max-w-sm space-y-5 rounded-2xl border border-slate-200 bg-white p-7 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">Sign in to ProHuman</h1>
+          <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
+            Workspace access token
+            <input type="password" required value={input} onChange={(event) => setInput(event.target.value)}
+              className="mt-2 w-full rounded-lg border border-slate-300 bg-transparent p-2 dark:border-slate-700" />
+          </label>
+          {error && <p role="alert" className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}
+          <button disabled={busy} className="w-full rounded-lg bg-sky-700 px-4 py-2 text-white disabled:opacity-60">
+            {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+      </main>
+    );
+  }
 
   return (
-    <UserContext.Provider
-      value={{
-        activeUser,
-        users,
-        filterByUserOnly,
-        setFilterByUserOnly,
-        switchUser,
-        addUserProfile,
-      }}
-    >
+    <UserContext.Provider value={{
+      activeUser: {
+        id: identity.user_id,
+        name: identity.user_id,
+        role: identity.role,
+        gradient: 'from-sky-500 to-indigo-600',
+      },
+      workspaceId: identity.workspace_id,
+      filterByUserOnly,
+      setFilterByUserOnly,
+      signOut: () => {
+        setAccessToken('');
+        setFilterByUserOnly(false);
+        setIdentity(null);
+      },
+    }}>
       {children}
     </UserContext.Provider>
   );
-};
+}
 
-export const useUser = (): UserContextType => {
+export function useUser(): UserContextType {
   const context = useContext(UserContext);
-  if (!context) {
-    throw new Error('useUser must be used within a UserProvider');
-  }
+  if (!context) throw new Error('useUser must be used within a UserProvider');
   return context;
-};
+}

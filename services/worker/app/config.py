@@ -23,7 +23,7 @@ class WorkerSettings(BaseSettings):
     stt_fallback_adapter: str | None = None
     max_retries: int = 3
 
-    model_config = SettingsConfigDict(env_prefix="WORKER_", case_sensitive=False, env_file=".env")
+    model_config = SettingsConfigDict(env_prefix="WORKER_", case_sensitive=False, env_file=".env", extra="ignore")
 
 
 @lru_cache()

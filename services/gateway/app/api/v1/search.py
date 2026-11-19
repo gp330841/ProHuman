@@ -4,15 +4,15 @@ import os
 from typing import Any
 import httpx
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from app.dependencies import get_transcript_repo
-from packages.contracts.search import SearchRequest, SearchResponse
+from packages.contracts.search import SearchMode, SearchRequest, SearchResponse
 from packages.db.repositories.transcript_repo import TranscriptRepository
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
 
-async def _get_embedding(query: str) -> list[float] | None:
+async def _get_embedding(query: str) -> tuple[list[float], str] | None:
     """Attempt to generate query embedding via Gemini or OpenAI/LiteLLM, returning None on failure."""
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("WORKER_GEMINI_API_KEY")
     if gemini_key:
@@ -31,9 +31,9 @@ async def _get_embedding(query: str) -> list[float] | None:
                         # Pad or truncate to 1536 dimensions expected by pgvector schema
                         if len(values) < 1536:
                             values = values + [0.0] * (1536 - len(values))
-                        return values[:1536]
+                        return values[:1536], "text-embedding-004"
         except Exception as e:
-            logger.warning("gemini_embedding_failed", error=str(e))
+            logger.warning("gemini_embedding_failed", error_type=type(e).__name__)
 
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
@@ -44,9 +44,9 @@ async def _get_embedding(query: str) -> list[float] | None:
                 input=[query],
             )
             if resp.data:
-                return resp.data[0]["embedding"]
+                return resp.data[0]["embedding"], "text-embedding-3-small"
         except Exception as e:
-            logger.warning("openai_embedding_failed", error=str(e))
+            logger.warning("openai_embedding_failed", error_type=type(e).__name__)
 
     return None
 
@@ -58,14 +58,16 @@ async def search(
     """Hybrid search endpoint with graceful fallback."""
     query_embedding = [0.0] * 1536
     used_model = "none"
+    search_mode = request.search_mode
 
     if request.search_mode.value != "LEXICAL":
         emb = await _get_embedding(request.query)
         if emb:
-            query_embedding = emb
-            used_model = "text-embedding-004"
+            query_embedding, used_model = emb
+        elif search_mode == SearchMode.SEMANTIC:
+            raise HTTPException(status_code=503, detail="Embedding service unavailable")
         else:
-            logger.info("fallback_to_lexical_fulltext", query=request.query)
+            search_mode = SearchMode.LEXICAL
     
     results_raw = await transcript_repo.hybrid_search(
         query_text=request.query,
@@ -75,7 +77,7 @@ async def search(
         session_ids=request.session_ids,
         time_range_start=request.time_range_start,
         time_range_end=request.time_range_end,
-        search_mode=request.search_mode.value,
+        search_mode=search_mode.value,
     )
     
     results = [
@@ -98,7 +100,7 @@ async def search(
         results=results,
         total_count=len(results),
         query_embedding_model=used_model,
-        search_mode_used=request.search_mode,
+        search_mode_used=search_mode,
     )
 
 __all__ = ["router"]

@@ -10,9 +10,9 @@ import {
   ArrowRight,
   Headphones
 } from 'lucide-react';
-import { createSession, Session, uploadAudioFile, submitSessionTranscript } from '../api/client';
+import { createSession, Session, uploadAudioFile } from '../api/client';
 import { devanagariToHinglish } from '../utils/hinglish';
-import { useUser } from '../context/UserContext';
+import { RecordingCapture } from '../api/recording';
 
 interface Props {
   onSessionCreated?: (session: Session) => void;
@@ -26,31 +26,26 @@ const HARDWARE_MODES = [
 ];
 
 export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscript }) => {
-  const { activeUser } = useUser();
   const [isRecording, setIsRecording] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [session, setSession] = useState<Session | null>(null);
   const [completedSessionId, setCompletedSessionId] = useState<string | null>(null);
-  const [selectedLanguage, setSelectedLanguage] = useState<'hi' | 'en'>('hi');
+  const [selectedLanguage, setSelectedLanguage] = useState<'multi' | 'hi' | 'en'>('multi');
   const [selectedHardware, setSelectedHardware] = useState('neo1-badge-01');
   const [statusMessage, setStatusMessage] = useState('Ready to capture voice memory');
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
   // Real-time speech transcription state
+  const [captionsAvailable, setCaptionsAvailable] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState<string>('');
   const [interimText, setInterimText] = useState<string>('');
-  const interimTextRef = useRef<string>('');
-  const isRecordingActiveRef = useRef<boolean>(false);
-  const speechTurnsRef = useRef<Array<{ text: string; start_time: number; end_time: number }>>([]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const captureRef = useRef<RecordingCapture | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const recognitionRef = useRef<any>(null);
-  const stoppingRef = useRef(false);
   const timerRef = useRef<any>(null);
-  const recordingStartTimeRef = useRef<number>(0);
 
   // Timer effect
   useEffect(() => {
@@ -76,8 +71,6 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
   // Cleanup hardware mic, WebSocket, and speech recognition on unmount
   useEffect(() => {
     return () => {
-      isRecordingActiveRef.current = false;
-      stoppingRef.current = true;
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         try { mediaRecorderRef.current.stop(); } catch {}
       }
@@ -85,255 +78,106 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        try { wsRef.current.close(); } catch {}
-        wsRef.current = null;
-      }
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch {}
-        recognitionRef.current = null;
-      }
+      captureRef.current?.close();
     };
   }, []);
 
   const startLiveStreaming = async () => {
+    setIsStarting(true);
     try {
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
         throw new Error('Microphone access is not supported on this browser.');
       }
-      const mimeType = ['audio/webm;codecs=opus', 'audio/webm'].find((type) =>
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find((type) =>
         MediaRecorder.isTypeSupported(type),
       );
-      if (!mimeType) throw new Error('This browser cannot record WebM audio.');
+      if (!mimeType) throw new Error('This browser cannot record a supported audio format.');
 
       setStatusMessage('Requesting microphone permissions...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      setStatusMessage(`Initializing secure AI session for ${activeUser.name}...`);
-      const newSession = await createSession(selectedHardware, selectedLanguage, {
-        user_id: activeUser.id,
-        user_name: activeUser.name,
-        user_role: activeUser.role,
-      });
+      const newSession = await createSession(selectedHardware, selectedLanguage);
       setSession(newSession);
       setCompletedSessionId(null);
+      setCaptionsAvailable(false);
       setLiveTranscript('');
       setInterimText('');
-      interimTextRef.current = '';
-      speechTurnsRef.current = [];
-      stoppingRef.current = false;
-      isRecordingActiveRef.current = true;
       onSessionCreated?.(newSession);
 
-      recordingStartTimeRef.current = Date.now();
 
-      // Setup WebSocket connection to Gateway
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/audio/${newSession.id}`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
-        setStatusMessage(
-          selectedLanguage === 'hi' 
-            ? 'Streaming Live: Speak naturally in Hindi or English (Auto-Hinglish enabled)' 
-            : 'Streaming Live: Speak naturally in English'
-        );
-      };
-
-      ws.onerror = (e) => {
-        console.warn('Live WebSocket streaming notice:', e);
-      };
-
-      // Setup Audio MediaRecorder
+      setStatusMessage('Connecting recorder…');
       const mediaRecorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 64000 });
       mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = async (event) => {
-        if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-          try {
-            const buffer = await event.data.arrayBuffer();
-            ws.send(buffer);
-          } catch (e) {
-            console.error('Failed sending audio buffer:', e);
+      const capture = new RecordingCapture(
+        newSession.id,
+        mediaRecorder.mimeType,
+        setStatusMessage,
+        setCaptionsAvailable,
+        (text, isFinal) => {
+          const caption = selectedLanguage === 'en' ? text : devanagariToHinglish(text);
+          if (isFinal) {
+            setLiveTranscript((previous) => [previous, caption].filter(Boolean).join(' '));
+            setInterimText('');
+          } else {
+            setInterimText(caption);
           }
-        }
+        },
+        () => {
+          setCompletedSessionId(newSession.id);
+          setIsUploading(false);
+          setStatusMessage('Recording saved. Transcription is queued.');
+        },
+        (message) => {
+          if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+          stream.getTracks().forEach((track) => track.stop());
+          setIsRecording(false);
+          setIsUploading(false);
+          setStatusMessage(message);
+        },
+      );
+      captureRef.current = capture;
+      mediaRecorder.ondataavailable = (event) => capture.append(event.data);
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        capture.finish();
       };
 
       mediaRecorder.start(250);
       setIsRecording(true);
 
-      // Start Browser Web Speech Recognition
-      const SpeechRecognition =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-      if (SpeechRecognition) {
-        try {
-          const recognition = new SpeechRecognition();
-          recognition.continuous = true;
-          recognition.interimResults = true;
-          recognition.lang = selectedLanguage === 'hi' ? 'hi-IN' : 'en-US';
-
-          recognition.onresult = (event: any) => {
-            let finalTurn = '';
-            let currentInterim = '';
-
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-              const res = event.results[i];
-              const rawTranscript = res[0].transcript;
-              const transcriptChunk = selectedLanguage === 'hi'
-                ? devanagariToHinglish(rawTranscript)
-                : rawTranscript;
-
-              if (res.isFinal) {
-                finalTurn += ' ' + transcriptChunk;
-              } else {
-                currentInterim += ' ' + transcriptChunk;
-              }
-            }
-
-            if (finalTurn.trim()) {
-              const nowSec = (Date.now() - recordingStartTimeRef.current) / 1000;
-              const prevEnd = speechTurnsRef.current.length > 0
-                ? speechTurnsRef.current[speechTurnsRef.current.length - 1].end_time
-                : 0;
-              const startSec = Math.max(prevEnd, Math.max(0, nowSec - 3));
-
-              speechTurnsRef.current.push({
-                text: finalTurn.trim(),
-                start_time: Math.round(startSec * 10) / 10,
-                end_time: Math.round(nowSec * 10) / 10,
-              });
-
-              setLiveTranscript((prev) => (prev ? prev + ' ' + finalTurn.trim() : finalTurn.trim()));
-            }
-
-            setInterimText(currentInterim.trim());
-            interimTextRef.current = currentInterim.trim();
-          };
-
-          recognition.onerror = (e: any) => {
-            if (e.error !== 'no-speech') {
-              console.warn('Speech recognition warning:', e.error);
-            }
-          };
-
-          recognition.onend = () => {
-            if (isRecordingActiveRef.current && !stoppingRef.current) {
-              try { recognition.start(); } catch {}
-            }
-          };
-
-          recognition.start();
-          recognitionRef.current = recognition;
-        } catch (e) {
-          console.warn('SpeechRecognition initialization notice:', e);
-        }
-      }
     } catch (error: any) {
       console.error('Audio recording failed:', error);
       setStatusMessage(`Error: ${error.message}`);
       setIsRecording(false);
-      isRecordingActiveRef.current = false;
+      captureRef.current?.close();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    } finally {
+      setIsStarting(false);
     }
   };
 
-  const stopLiveStreaming = async () => {
-    stoppingRef.current = true;
-    isRecordingActiveRef.current = false;
+  const stopLiveStreaming = () => {
     setIsRecording(false);
-    setStatusMessage('Finalizing audio stream & extracting intelligence...');
-
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch {}
-      recognitionRef.current = null;
-    }
-
-    if (interimTextRef.current && interimTextRef.current.trim()) {
-      const nowSec = (Date.now() - recordingStartTimeRef.current) / 1000;
-      speechTurnsRef.current.push({
-        text: interimTextRef.current.trim(),
-        start_time: Math.max(0, nowSec - 2),
-        end_time: nowSec,
-      });
-      setLiveTranscript((prev) => (prev ? prev + ' ' + interimTextRef.current.trim() : interimTextRef.current.trim()));
-      setInterimText('');
-    }
-
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try { mediaRecorderRef.current.stop(); } catch {}
-    }
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      try {
-        wsRef.current.send(JSON.stringify({ type: 'eos' }));
-        setTimeout(() => {
-          if (wsRef.current) wsRef.current.close();
-        }, 600);
-      } catch {}
-    }
-
-    const currentSessionId = session?.id;
-    const finalInterim = interimTextRef.current?.trim() || '';
-    let turns = [...speechTurnsRef.current];
-    if (turns.length === 0 && (liveTranscript || finalInterim)) {
-      const combined = `${liveTranscript} ${finalInterim}`.trim();
-      if (combined) {
-        const nowSec = Math.max(1.0, (Date.now() - recordingStartTimeRef.current) / 1000);
-        turns.push({
-          text: combined,
-          start_time: 0.0,
-          end_time: nowSec,
-        });
-      }
-    }
-
-    if (currentSessionId && turns.length > 0) {
-      try {
-        setStatusMessage('Saving transcript & generating AI summary...');
-        const segmentsPayload = turns.map((t) => ({
-          text: t.text,
-          speaker_name: activeUser.name,
-          start_time: t.start_time,
-          end_time: t.end_time,
-          confidence: 0.95,
-        }));
-        await submitSessionTranscript(currentSessionId, segmentsPayload);
-        setCompletedSessionId(currentSessionId);
-        setStatusMessage('Transcript saved! Gemini is summarizing and extracting action items...');
-      } catch (e: any) {
-        console.warn('Transcript background sync notice:', e);
-        setStatusMessage(`Saved with warning: ${e.message}`);
-      }
-    } else if (currentSessionId) {
-      setCompletedSessionId(currentSessionId);
-      setStatusMessage('Session recorded. Speak next time to capture live turns.');
-    }
+    setIsUploading(true);
+    setStatusMessage('Saving recording…');
+    setInterimText('');
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
   };
 
   const handleFileUpload = async (file: File) => {
-    if (!file) return;
+    if (!file || isRecording || isUploading || isStarting) return;
 
     try {
       setIsUploading(true);
       setStatusMessage(`Analyzing & uploading ${file.name}...`);
-      const newSession = await createSession(selectedHardware, selectedLanguage, {
-        user_id: activeUser.id,
-        user_name: activeUser.name,
-        user_role: activeUser.role,
-      });
+      const newSession = await createSession(selectedHardware, selectedLanguage);
       setSession(newSession);
       onSessionCreated?.(newSession);
       setStatusMessage(`Transcribing audio (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`);
       await uploadAudioFile(newSession.id, file);
-      setStatusMessage('Audio processed! Minutes of meeting generated.');
+      setStatusMessage('Audio uploaded. Transcription is queued.');
       setCompletedSessionId(newSession.id);
     } catch (error: unknown) {
       setStatusMessage(`Upload failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -388,10 +232,10 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
             <div className="flex items-center p-1 rounded-2xl glass-pill">
               <button
                 type="button"
-                onClick={() => setSelectedLanguage('hi')}
-                disabled={isRecording || isUploading}
+                onClick={() => setSelectedLanguage('multi')}
+                disabled={isRecording || isUploading || isStarting}
                 className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                  selectedLanguage === 'hi'
+                  selectedLanguage === 'multi'
                     ? 'bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-sm'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
@@ -401,7 +245,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
               <button
                 type="button"
                 onClick={() => setSelectedLanguage('en')}
-                disabled={isRecording || isUploading}
+                disabled={isRecording || isUploading || isStarting}
                 className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
                   selectedLanguage === 'en'
                     ? 'bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-sm'
@@ -418,7 +262,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
               <select
                 value={selectedHardware}
                 onChange={(e) => setSelectedHardware(e.target.value)}
-                disabled={isRecording || isUploading}
+                disabled={isRecording || isUploading || isStarting}
                 className="bg-transparent text-xs text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
               >
                 {HARDWARE_MODES.map((h) => (
@@ -438,7 +282,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
             {!isRecording ? (
               <button
                 onClick={startLiveStreaming}
-                disabled={isUploading}
+                disabled={isUploading || isStarting}
                 className="w-24 h-24 md:w-28 md:h-28 rounded-full bg-gradient-to-tr from-sky-500 via-cyan-400 to-indigo-600 hover:scale-105 active:scale-95 transition-all duration-300 flex flex-col items-center justify-center text-white shadow-[0_0_40px_rgba(14,165,233,0.35)] hover:shadow-[0_0_55px_rgba(14,165,233,0.55)] group cursor-pointer disabled:opacity-50"
               >
                 <Mic className="w-9 h-9 md:w-11 md:h-11 transition-transform group-hover:scale-110" />
@@ -484,8 +328,8 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
               </p>
             )}
             <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-              {selectedLanguage === 'hi' 
-                ? 'Speak in Hindi or English — automatically saved in structured MOM.' 
+              {selectedLanguage === 'multi'
+                ? 'Speak in Hindi or English — automatically saved in structured MOM.'
                 : 'Speak in English — automatically converted into structured meeting notes.'}
             </p>
           </div>
@@ -499,7 +343,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
                 <Volume2 className="w-3.5 h-3.5" />
                 Live Speech Stream
               </span>
-              {isRecording && (
+              {isRecording && captionsAvailable && (
                 <span className="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   Listening in real-time...
@@ -515,7 +359,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
               ) : interimText ? (
                 <span className="text-sky-500 dark:text-sky-300 italic">{interimText}</span>
               ) : (
-                <span className="text-slate-400 dark:text-slate-500 italic">Say something... your speech will appear here dynamically</span>
+                <span className="text-slate-400 dark:text-slate-500 italic">{captionsAvailable ? 'Waiting for speech…' : 'Live captions unavailable. A transcript is generated after recording.'}</span>
               )}
             </p>
           </div>
@@ -556,7 +400,7 @@ export const AudioRecorder: React.FC<Props> = ({ onSessionCreated, onViewTranscr
               const file = e.target.files?.[0];
               if (file) handleFileUpload(file);
             }}
-            disabled={isUploading || isRecording}
+            disabled={isUploading || isRecording || isStarting}
             className="hidden"
           />
           <label htmlFor="audio-file-input" className="cursor-pointer flex flex-col items-center">

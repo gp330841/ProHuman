@@ -29,7 +29,7 @@ class TestGatewayAppFactory:
         assert app.version == "0.1.0"
 
         # Verify routes are registered
-        routes = [route.path for route in app.routes]
+        routes = app.openapi()["paths"]
         assert "/health" in routes
         assert any("/api/v1" in r for r in routes)
 
@@ -38,6 +38,7 @@ class TestGatewayContractsValidation:
     def test_session_create_validation(self):
         req = SessionCreate(
             device_id="hardware-gadget-01",
+            audio_format="OPUS",
             language="hi",
             metadata={"source": "pytest"},
         )

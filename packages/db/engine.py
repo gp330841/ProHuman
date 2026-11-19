@@ -37,6 +37,9 @@ def create_db_engine(database_url: str, **kwargs) -> AsyncEngine:
         "pool_pre_ping": True,
         "pool_recycle": 1800,
     }
+    if "poolclass" in kwargs:
+        engine_kwargs.pop("pool_size")
+        engine_kwargs.pop("max_overflow")
     engine_kwargs.update(kwargs)
     engine = create_async_engine(database_url, **engine_kwargs)
     async_session_factory = async_sessionmaker(

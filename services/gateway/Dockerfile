@@ -9,10 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir build setuptools wheel
 
-COPY pyproject.toml .
-COPY app ./app
+COPY services/gateway/pyproject.toml /build/gateway/
+COPY services/gateway/app /build/gateway/app
+COPY services/gateway/app ./app
+COPY packages ./packages
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir /build/gateway alembic
 
 ENV PYTHONPATH=/app
 

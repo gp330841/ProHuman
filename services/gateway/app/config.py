@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["*"]
 
+    deepgram_api_key: str = ""
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/prohuman"
     redis_url: str = "redis://localhost:6379/0"
     s3_endpoint_url: str = "http://localhost:9000"
